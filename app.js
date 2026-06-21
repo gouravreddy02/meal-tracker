@@ -49,6 +49,7 @@
   })();
   let tab = "quick"; // quick | custom
   let lastSlot = SLOTS[0]; // section a freshly-added custom food lands in
+  let authMsg = ""; // transient cloud-sync status/error message
   // Auto-sync to plan.js via the File System Access API. The user links the file
   // once (handle persisted in IndexedDB via Store); custom adds then write to it.
   // Browsers without the API fall back to downloading plan.js.
@@ -59,7 +60,6 @@
   }
 
   // Cloud sync: when the Store pulls remote data, reload our state and re-render.
-  // Pull on startup and whenever the tab regains focus (e.g. switching devices).
   window.Store.onSync(() => {
     logs = window.Store.getLogs();
     weights = window.Store.getWeights();
@@ -67,10 +67,17 @@
     unit = window.Store.getUnit();
     render();
   });
-  window.Store.syncInit();
-  document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) window.Store.syncInit();
-  });
+  // The Firebase SDK loads async (index.html module). Once ready, react to auth
+  // state: on sign-in/restore, pull remote data; always re-render to update the
+  // sync panel. Also re-pull when the tab regains focus (e.g. switching devices).
+  function wireAuth() {
+    window.FBAuth.onChange(() => { authMsg = ""; window.Store.syncInit(); render(); });
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) window.Store.syncInit();
+    });
+  }
+  if (window.FBAuth) wireAuth();
+  else window.addEventListener("fbauth-ready", wireAuth, { once: true });
   // live drag state; null fields when not dragging
   let drag = { active: false }, dragSource = null, dragClone = null, dragPh = null, dragOff = null, dragCtx = null;
 
@@ -514,9 +521,11 @@
     } else {
       tools.appendChild(el("button", { class: "tool", onClick: downloadPlan }, "Download plan.js"));
     }
-    tools.appendChild(el("button", { class: "tool", onClick: setupCloud },
-      window.Store.getCloudConfig() ? "✓ Sync on" : "Set up sync"));
     wrap.appendChild(tools);
+
+    // cloud sync (sign-in / status) — only when Firebase config is present
+    const sp = syncPanel();
+    if (sp) wrap.appendChild(sp);
 
     root.appendChild(wrap);
   }
@@ -547,6 +556,15 @@
 // ============================================================
 
 window.PLAN = {
+  // Cloud sync (Firebase). These values are PUBLIC by design — security comes
+  // from Firebase Auth + Realtime Database rules, not from hiding them.
+  sync: {
+    apiKey: ${JSON.stringify((P.sync && P.sync.apiKey) || "PASTE_WEB_API_KEY")},
+    authDomain: ${JSON.stringify((P.sync && P.sync.authDomain) || "PASTE-PROJECT.firebaseapp.com")},
+    databaseURL: ${JSON.stringify((P.sync && P.sync.databaseURL) || "https://PASTE-default-rtdb.firebaseio.com")},
+    projectId: ${JSON.stringify((P.sync && P.sync.projectId) || "PASTE-PROJECT")},
+  },
+
   // Daily targets from the lean-bulk plan
   targets: { cal: ${T.cal}, protein: ${T.protein}, carbs: ${T.carbs}, fat: ${T.fat} },
 
@@ -615,21 +633,36 @@ ${foodsStr}
     URL.revokeObjectURL(url);
   }
 
-  // Configure cloud sync. Enter the same Firebase URL + secret code on every
-  // device; syncInit then pulls shared data and future writes push to it.
-  function setupCloud() {
-    const cfg = window.Store.getCloudConfig() || {};
-    const url = prompt(
-      "Firebase Realtime Database URL\n(e.g. https://yourproject-default-rtdb.firebaseio.com)",
-      cfg.url || ""
-    );
-    if (url == null) return;
-    const code = prompt("Sync code — use the SAME secret on every device:", cfg.code || "");
-    if (code == null) return;
-    if (!url.trim() || !code.trim()) { alert("Both the URL and a sync code are required."); return; }
-    window.Store.setCloudConfig({ url: url.trim(), code: code.trim() });
-    window.Store.syncInit();
-    render();
+  // Turn a Firebase auth error into a readable message.
+  function authError(msg) {
+    if (/popup-closed-by-user|cancelled-popup/.test(msg)) return "Sign-in was cancelled.";
+    if (/popup-blocked/.test(msg)) return "Your browser blocked the sign-in popup — allow popups and retry.";
+    if (/unauthorized-domain/.test(msg)) return "This site isn't an authorized domain in Firebase Auth settings.";
+    if (/network/.test(msg)) return "Network error — check your connection.";
+    return msg || "Something went wrong.";
+  }
+
+  // Cloud-sync panel: Google sign-in button, or signed-in status + sign out.
+  function syncPanel() {
+    if (!window.Store.isSyncConfigured()) return null;
+    const panel = el("div", { class: "card trend" }, el("div", { class: "eyebrow lime" }, "Cloud sync"));
+    const user = window.Store.getUser();
+    if (user) {
+      panel.appendChild(el("div", { class: "sub" }, `Signed in as ${user.email} — synced across devices.`));
+      panel.appendChild(el("button", { class: "tool", style: "margin-top:10px",
+        onClick: () => { window.Store.signOut(); authMsg = ""; render(); } }, "Sign out"));
+      return panel;
+    }
+    panel.appendChild(el("div", { class: "sub" }, "Sign in with Google to sync this device with your others."));
+    const btn = el("button", { class: "addBtn", style: "margin-top:12px", onClick: async () => {
+      authMsg = "Opening Google sign-in…"; render();
+      try { await window.Store.signInWithGoogle(); authMsg = ""; render(); } // onChange handler syncs + re-renders
+      catch (e) { authMsg = authError(e && (e.code || e.message)); render(); }
+    } }, "Sign in with Google");
+    if (!window.Store.isSyncReady()) { btn.setAttribute("disabled", "true"); authMsg = authMsg || "Loading sign-in…"; }
+    panel.appendChild(btn);
+    if (authMsg) panel.appendChild(el("div", { class: "sub", style: "margin-top:8px" }, authMsg));
+    return panel;
   }
 
   function exportData() {

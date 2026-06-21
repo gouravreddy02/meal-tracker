@@ -12,7 +12,7 @@ window.Store = (function () {
   const WEIGHTS_KEY = "mealtracker.weights.v1"; // { "YYYY-MM-DD": number }
   const FOODS_KEY = "mealtracker.foods.v1";   // { "<slot>": [ {n,c,p,cb,f}, ... ] } — user's quick-add arrangement
   const UNIT_KEY = "mealtracker.unit.v1";     // "kg" | "lb" — weight display unit (weights are always stored in kg)
-  const CLOUD_KEY = "mealtracker.cloud.v1";   // { url, code } — Firebase RTDB sync config
+  // Note: the Firebase SDK persists its own auth session; no local key needed.
 
   // ---- IndexedDB: the linked plan.js file handle ----
   // FileSystemFileHandle objects can't be JSON/localStorage'd, but they survive
@@ -60,21 +60,35 @@ window.Store = (function () {
     }
   }
 
-  // ---- cloud sync (Firebase Realtime Database REST) ----
-  // Each device uses the same { url, code }; data lives at /u/<code>.json.
-  // Local writes are debounced and PUT to the cloud; pulls replace the local
-  // cache and notify the UI via the onSync callback. Last write wins — fine for
-  // a single user who isn't editing two devices offline at the same moment.
+  // ---- cloud sync (Firebase: Google Auth + Realtime Database, REST) ----
+  // The public Firebase config (apiKey, authDomain, databaseURL, projectId) lives
+  // in PLAN.sync. Google sign-in + session handling is done by the Firebase SDK
+  // (loaded in index.html, exposed as window.FBAuth); here we just take the
+  // signed-in user's idToken to authorize Realtime Database REST calls. Data
+  // lives at /users/<uid>, and Security Rules ensure only that user can touch it
+  // — so the public config is safe by design. Local writes are debounced +
+  // pushed; pulls replace the cache and fire onSync.
   let syncCb = null, pushT = null;
 
-  function cloudCfg() {
-    try { return JSON.parse(localStorage.getItem(CLOUD_KEY)) || null; } catch (e) { return null; }
+  function syncCfg() {
+    const c = (window.PLAN && window.PLAN.sync) || null;
+    if (!c || !c.apiKey || !c.databaseURL) return null;
+    if (/PASTE/.test(c.apiKey) || /PASTE/.test(c.databaseURL)) return null; // placeholders
+    return c;
   }
-  function cloudUrl() {
-    const c = cloudCfg();
-    if (!c || !c.url || !c.code) return null;
-    return `${c.url.replace(/\/+$/, "")}/u/${encodeURIComponent(c.code)}.json`;
+  const fb = () => window.FBAuth || null;            // Firebase SDK wrapper, once loaded
+  function currentUser() { const a = fb(); return a ? a.getUser() : null; }
+  async function signInWithGoogle() { const a = fb(); if (!a) throw new Error("Sync isn't ready yet."); return a.signInWithGoogle(); }
+  function signOut() { const a = fb(); if (a) a.signOut(); }
+  // Build the authorized REST URL for the signed-in user's data node.
+  async function dataUrl() {
+    const cfg = syncCfg(), a = fb(), user = currentUser();
+    if (!cfg || !a || !user) return null;
+    const tok = await a.getToken(); // SDK refreshes this automatically
+    if (!tok) return null;
+    return `${cfg.databaseURL.replace(/\/+$/, "")}/users/${user.uid}.json?auth=${tok}`;
   }
+
   function snapshot() {
     return {
       logs: read(LOGS_KEY),
@@ -93,26 +107,26 @@ window.Store = (function () {
     return true;
   }
   async function cloudPull() {
-    const url = cloudUrl();
+    const url = await dataUrl();
     if (!url) return null;
     try { const r = await fetch(url); return r.ok ? await r.json() : null; }
     catch (e) { console.warn("cloud pull failed", e); return null; }
   }
   async function cloudPush() {
-    const url = cloudUrl();
+    const url = await dataUrl();
     if (!url) return false;
     try { const r = await fetch(url, { method: "PUT", body: JSON.stringify(snapshot()) }); return r.ok; }
     catch (e) { console.warn("cloud push failed", e); return false; }
   }
   function schedulePush() {
-    if (!cloudUrl()) return;
+    if (!currentUser()) return;
     clearTimeout(pushT);
     pushT = setTimeout(cloudPush, 600);
   }
   // Pull remote into the local cache (or seed the cloud from local on first run),
   // then notify the UI so it can re-read and re-render.
   async function syncInit() {
-    if (!cloudUrl()) return;
+    if (!currentUser() || !syncCfg()) return;
     const remote = await cloudPull();
     if (remote && (remote.logs || remote.weights || remote.foods)) applySnapshot(remote);
     else cloudPush();
@@ -133,9 +147,12 @@ window.Store = (function () {
     },
     setFoods: (obj) => { const ok = write(FOODS_KEY, obj); schedulePush(); return ok; },
 
-    // Cloud sync config + lifecycle. Same { url, code } on every device.
-    getCloudConfig: () => cloudCfg(),
-    setCloudConfig: (cfg) => { localStorage.setItem(CLOUD_KEY, JSON.stringify(cfg)); },
+    // Cloud sync: Firebase Google auth + per-user data.
+    isSyncConfigured: () => !!syncCfg(),
+    isSyncReady: () => !!fb(),       // Firebase SDK loaded?
+    getUser: () => currentUser(),
+    signInWithGoogle, // → Promise, throws on failure
+    signOut,
     onSync: (cb) => { syncCb = cb; },
     syncInit, // pull remote → cache, then fire onSync
     cloudPush,
@@ -180,6 +197,7 @@ window.Store = (function () {
       localStorage.removeItem(FOODS_KEY);
       localStorage.removeItem(UNIT_KEY);
       idbSet(PLAN_HANDLE_KEY, null);
+      signOut();
     },
   };
 })();

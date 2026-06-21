@@ -5,6 +5,17 @@
 // ============================================================
 
 window.PLAN = {
+  // Cloud sync (Firebase). These values are PUBLIC by design — security comes
+  // from Firebase Auth + Realtime Database rules, not from hiding them. Fill in
+  // from Firebase console → Project settings → your web app config. Leave the
+  // placeholders to disable sync (app falls back to local-only storage).
+  sync: {
+    apiKey: "AIzaSyDqOMSnpTLSq2aR8egPlt3ki4WFeZ4BO5o",
+    authDomain: "meal-tracker-12ca8.firebaseapp.com",
+    databaseURL: "https://meal-tracker-12ca8-default-rtdb.firebaseio.com",
+    projectId: "meal-tracker-12ca8",
+  },
+
   // Daily targets from the lean-bulk plan
   targets: { cal: 3800, protein: 155, carbs: 377, fat: 127 },
 
