@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Meal Log</title>
+  <meta name="theme-color" content="#1a1626" />
+  <link rel="manifest" href="manifest.json" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Meal Log" />
+  <style>
+    :root {
+      --ink:#1a1626; --panel:#241d35; --lime:#c5f04a; --mute:#8a82a0;
+      --line:#352c4a; --blue:#6ad2ff; --orange:#ff9d6a;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin:0; padding:0; background:var(--ink); }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      color:#fff; padding: max(20px, env(safe-area-inset-top)) 14px 60px;
+      -webkit-font-smoothing: antialiased;
+    }
+    .wrap { max-width: 460px; margin: 0 auto; }
+
+    .header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:18px; }
+    .eyebrow { font-size:11px; letter-spacing:3px; color:var(--lime); font-weight:700; text-transform:uppercase; }
+    .eyebrow.lime { color:var(--lime); }
+    h1 { font-size:30px; margin:4px 0 0; font-weight:800; letter-spacing:-1px; }
+    .sub { font-size:13px; color:var(--mute); margin-top:2px; }
+    .badge { font-size:11px; font-weight:700; padding:5px 9px; border-radius:8px; margin-top:4px; min-width:54px; text-align:center; }
+    .badge.ok { background:#27331a; color:var(--lime); border:1px solid var(--line); }
+    .badge.err { background:#3a1f2a; color:#ff8d8d; border:1px solid #5a2a3a; }
+
+    .strip { display:flex; gap:7px; overflow-x:auto; padding-bottom:8px; margin-bottom:16px; }
+    .strip::-webkit-scrollbar { height:0; }
+    .day { flex:0 0 auto; min-width:52px; padding:8px 6px; border-radius:12px; cursor:pointer;
+      background:var(--panel); color:#fff; border:1px solid var(--line); text-align:center; }
+    .day.active { background:var(--lime); color:var(--ink); border-color:var(--lime); }
+    .dow { font-size:10px; opacity:.7; font-weight:600; }
+    .dnum { font-size:17px; font-weight:800; line-height:1.2; }
+    .dot { height:5px; width:5px; border-radius:5px; margin:3px auto 0; background:transparent; }
+    .dot.on { background:var(--lime); }
+    .day.active .dot.on { background:var(--ink); }
+
+    .card { background:var(--panel); border-radius:18px; padding:18px; border:1px solid var(--line); margin-bottom:16px; }
+    .totalsTop { display:flex; align-items:baseline; justify-content:space-between; margin-bottom:14px; }
+    .bigcal { font-size:38px; font-weight:800; line-height:1; letter-spacing:-1.5px; }
+    .weightBox { text-align:right; }
+    .wlabel { font-size:11px; color:var(--mute); text-transform:uppercase; letter-spacing:1px; }
+    .winput { width:72px; margin-top:3px; background:var(--ink); border:1px solid var(--line); color:var(--lime);
+      font-size:18px; font-weight:700; border-radius:10px; padding:6px 8px; text-align:right; outline:none; }
+    .wunit { font-size:12px; color:var(--mute); margin-left:4px; background:none; border:none;
+      cursor:pointer; padding:2px 4px; border-radius:6px; text-decoration:underline dotted;
+      text-underline-offset:2px; font:inherit; }
+    .wunit:active { color:var(--lime); }
+
+    .mb { margin-bottom:10px; }
+    .mbtop { display:flex; justify-content:space-between; font-size:12px; color:var(--mute); margin-bottom:4px; }
+    .mblabel { letter-spacing:.5px; text-transform:uppercase; font-weight:600; }
+    .mbval { color:#fff; font-variant-numeric:tabular-nums; }
+    .muted { color:var(--mute); }
+    .track { height:7px; background:var(--line); border-radius:6px; overflow:hidden; }
+    .fill { height:100%; border-radius:6px; transition:width .3s; }
+
+    .list { margin-bottom:16px; }
+    .empty { color:var(--mute); font-size:14px; text-align:center; padding:18px 0; }
+    .item { display:flex; align-items:center; justify-content:space-between; padding:11px 14px;
+      background:var(--panel); border-radius:12px; margin-bottom:7px; border:1px solid var(--line); }
+    .itemInfo { flex:1; min-width:0; }
+    .iname { font-size:14px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .imacros { font-size:11.5px; color:var(--mute); margin-top:1px; }
+    .x { margin-left:10px; background:none; border:none; color:var(--mute); font-size:22px; cursor:pointer; line-height:1; }
+
+    /* grouped log + drag-and-drop */
+    .logSection { margin-bottom:6px; }
+    .logSection .slotTitle { margin:14px 0 8px; }
+    .logSection:first-child .slotTitle { margin-top:2px; }
+    .sectionBody { display:flex; flex-direction:column; gap:7px; min-height:4px; }
+    .sectionBody .item { margin-bottom:0; }
+    .item.draggable { touch-action:none; user-select:none; -webkit-user-select:none;
+      -webkit-touch-callout:none; cursor:grab; }
+    .grip { flex:0 0 auto; margin-right:10px; color:var(--mute); font-size:15px; line-height:1; }
+    .placeholder { border:1px dashed var(--lime); border-radius:12px; background:rgba(197,240,74,.07); }
+    .dropHint { color:var(--mute); font-size:12px; text-align:center; padding:12px 0;
+      border:1px dashed var(--line); border-radius:12px; }
+    .dragClone { position:fixed; z-index:1000; margin:0; pointer-events:none; opacity:.96;
+      transform:scale(1.03); box-shadow:0 12px 28px rgba(0,0,0,.5); border-color:var(--lime); }
+
+    .tabs { display:flex; gap:8px; margin-bottom:12px; }
+    .tab { flex:1; padding:9px; border-radius:11px; cursor:pointer; font-size:13px; font-weight:700;
+      background:var(--panel); color:#fff; border:1px solid var(--line); }
+    .tab.active { background:var(--lime); color:var(--ink); border-color:var(--lime); }
+
+    .slotTitle { font-size:11px; letter-spacing:2px; color:var(--mute); font-weight:700;
+      text-transform:uppercase; margin:16px 0 8px; }
+    .slotTitle:first-of-type { margin-top:4px; }
+    .presets { display:flex; flex-wrap:wrap; gap:7px; min-height:4px; }
+    .presets .dropHint { width:100%; }
+    .preset { background:var(--panel); border:1px solid var(--line); color:#fff; border-radius:11px;
+      padding:9px 12px; font-size:12.5px; cursor:pointer; text-align:left; }
+    .preset.draggable { touch-action:none; user-select:none; -webkit-user-select:none;
+      -webkit-touch-callout:none; }
+    .pn { font-weight:600; }
+    .pc { color:var(--mute); margin-left:6px; }
+
+    .customBox { background:var(--panel); border-radius:14px; padding:14px; border:1px solid var(--line); }
+    .ci { width:100%; background:var(--ink); border:1px solid var(--line); color:#fff;
+      border-radius:10px; padding:10px 12px; font-size:14px; outline:none; margin-bottom:8px; }
+    .crow { display:flex; gap:8px; }
+    .crow .ci { margin-bottom:8px; }
+    .addBtn { margin-top:2px; width:100%; background:var(--lime); color:var(--ink); border:none;
+      border-radius:11px; padding:11px; font-size:14px; font-weight:700; cursor:pointer; }
+
+    .trend { margin-top:22px; }
+    .wcols { display:flex; gap:12px; margin-top:10px; }
+    .wcol { flex:1; text-align:center; padding:10px 0; background:var(--ink); border-radius:11px; }
+    .wctitle { font-size:11px; color:var(--mute); }
+    .wcval { font-size:22px; font-weight:800; }
+    .wcval.muted { color:var(--mute); }
+    .wcu { font-size:12px; color:var(--mute); font-weight:400; }
+    .diff { margin-top:12px; font-size:13px; text-align:center; color:var(--mute); }
+    .lime { color:var(--lime); } .b { font-weight:700; }
+    .note { margin-top:10px; font-size:11.5px; color:var(--mute); line-height:1.5; text-align:center; }
+
+    .tools { display:flex; gap:8px; margin-top:16px; }
+    .tool { flex:1; padding:10px; border-radius:11px; background:transparent; color:var(--mute);
+      border:1px solid var(--line); font-size:12px; font-weight:600; cursor:pointer; }
+    .tool:active { background:var(--panel); }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script src="plan.js"></script>
+  <script src="store.js"></script>
+  <script src="app.js"></script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("sw.js").catch(() => {});
+    }
+  </script>
+</body>
+</html>

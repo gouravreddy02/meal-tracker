@@ -1,0 +1,17 @@
+{
+  "name": "Meal Log — Lean Bulk",
+  "short_name": "Meal Log",
+  "description": "Daily meal and weight tracker for a 2-week lean bulk.",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#1a1626",
+  "theme_color": "#1a1626",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
