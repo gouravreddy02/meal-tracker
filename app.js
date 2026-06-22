@@ -52,14 +52,6 @@
   let authMsg = "";      // transient cloud-sync status/error message
   let authReady = false; // has the Firebase SDK reported initial auth state yet?
   let localOnly = false; // user chose to skip login and use this device only
-  // Auto-sync to plan.js via the File System Access API. The user links the file
-  // once (handle persisted in IndexedDB via Store); custom adds then write to it.
-  // Browsers without the API fall back to downloading plan.js.
-  const FS_SUPPORTED = "showOpenFilePicker" in window;
-  let planHandle = null;
-  if (FS_SUPPORTED) {
-    Promise.resolve(window.Store.getPlanFileHandle()).then((h) => { if (h) { planHandle = h; render(); } });
-  }
 
   // Cloud sync: when the Store pulls remote data, reload our state and re-render.
   window.Store.onSync(() => {
@@ -507,8 +499,7 @@
             const slotFoods = foods[lastSlot] = foods[lastSlot] || [];
             if (!slotFoods.some((q) => q.n === food.n && q.c === food.c && q.p === food.p && q.cb === food.cb && q.f === food.f)) {
               slotFoods.push(food);
-              saveFoods();
-              syncPlan(); // mirror into plan.js (auto-write if linked, else download)
+              saveFoods(); // persists locally + syncs to the cloud via Store
             }
             tab = "quick"; render();
           } }, "Add food")
@@ -543,14 +534,6 @@
       el("button", { class: "tool", onClick: exportData }, "Export backup"),
       el("button", { class: "tool", onClick: importData }, "Import backup")
     );
-    // plan.js sync: link the file once (auto-write thereafter), or download it
-    // on browsers without the File System Access API.
-    if (FS_SUPPORTED) {
-      tools.appendChild(el("button", { class: "tool", onClick: linkPlanFile },
-        planHandle ? "✓ plan.js linked" : "Link plan.js"));
-    } else {
-      tools.appendChild(el("button", { class: "tool", onClick: downloadPlan }, "Download plan.js"));
-    }
     wrap.appendChild(tools);
 
     // cloud sync (sign-in / status) — only when Firebase config is present
@@ -568,99 +551,6 @@
       ),
       el("div", { class: "track" }, el("div", { class: "fill", style: `width:${pct(val, target)}%;background:${color}` }))
     );
-  }
-
-  // ---- plan.js auto-sync ----
-  // Serialize the current config + quick-add foods back into plan.js source.
-  function planText() {
-    const foodsStr = Object.entries(foods).map(([slot, items]) => {
-      const lines = items.map((it) =>
-        `      { n: ${JSON.stringify(it.n)}, c: ${it.c}, p: ${it.p}, cb: ${it.cb}, f: ${it.f} },`
-      ).join("\n");
-      return `    ${JSON.stringify(slot)}: [\n${lines}\n    ],`;
-    }).join("\n");
-    return `// ============================================================
-//  plan.js — your plan config. Edit these values anytime.
-//  This is the single source of truth for targets + foods.
-//  Claude Code can extend this file to add features later.
-// ============================================================
-
-window.PLAN = {
-  // Cloud sync (Firebase). These values are PUBLIC by design — security comes
-  // from Firebase Auth + Realtime Database rules, not from hiding them.
-  sync: {
-    apiKey: ${JSON.stringify((P.sync && P.sync.apiKey) || "PASTE_WEB_API_KEY")},
-    authDomain: ${JSON.stringify((P.sync && P.sync.authDomain) || "PASTE-PROJECT.firebaseapp.com")},
-    databaseURL: ${JSON.stringify((P.sync && P.sync.databaseURL) || "https://PASTE-default-rtdb.firebaseio.com")},
-    projectId: ${JSON.stringify((P.sync && P.sync.projectId) || "PASTE-PROJECT")},
-  },
-
-  // Daily targets from the lean-bulk plan
-  targets: { cal: ${T.cal}, protein: ${T.protein}, carbs: ${T.carbs}, fat: ${T.fat} },
-
-  // 14-day tracking window. Change startDate to roll the window forward.
-  startDate: ${JSON.stringify(P.startDate)}, // YYYY-MM-DD
-  numDays: ${P.numDays},
-
-  // Weight goal guidance shown in the trend panel
-  weightGoal: {
-    minGainKg: ${P.weightGoal.minGainKg},
-    maxGainKg: ${P.weightGoal.maxGainKg},
-    note: ${JSON.stringify(P.weightGoal.note)},
-  },
-
-  // Quick-add foods, grouped into meal slots. Macros: c=calories, p=protein,
-  // cb=carbs, f=fat (grams). Slots render in the order listed below; the slot
-  // name is the heading shown in the Quick add tab.
-  foods: {
-${foodsStr}
-  },
-};
-`;
-  }
-
-  // Push the current foods into plan.js: write to the linked file if we have a
-  // handle, otherwise (no File System Access API) fall back to a download.
-  function syncPlan() {
-    if (planHandle) writePlanFile();
-    else if (!FS_SUPPORTED) downloadPlan();
-    // FS supported but not linked yet: user links once via the tools button.
-  }
-  async function writePlanFile() {
-    if (!planHandle) return false;
-    try {
-      const opts = { mode: "readwrite" };
-      if ((await planHandle.queryPermission(opts)) !== "granted" &&
-          (await planHandle.requestPermission(opts)) !== "granted") {
-        flash(false); return false;
-      }
-      const w = await planHandle.createWritable();
-      await w.write(planText());
-      await w.close();
-      flash(true);
-      return true;
-    } catch (e) { console.warn("plan.js write failed", e); flash(false); return false; }
-  }
-  async function linkPlanFile() {
-    try {
-      const [h] = await window.showOpenFilePicker({
-        multiple: false,
-        types: [{ description: "JavaScript", accept: { "text/javascript": [".js"] } }],
-      });
-      planHandle = h;
-      await window.Store.setPlanFileHandle(h);
-      await writePlanFile();
-      render();
-    } catch (e) { /* user cancelled the picker */ }
-  }
-  function downloadPlan() {
-    const blob = new Blob([planText()], { type: "text/javascript" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "plan.js";
-    a.click();
-    URL.revokeObjectURL(url);
   }
 
   // Turn a Firebase auth error into a readable message.

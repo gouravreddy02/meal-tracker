@@ -14,33 +14,6 @@ window.Store = (function () {
   const UNIT_KEY = "mealtracker.unit.v1";     // "kg" | "lb" — weight display unit (weights are always stored in kg)
   // Note: the Firebase SDK persists its own auth session; no local key needed.
 
-  // ---- IndexedDB: the linked plan.js file handle ----
-  // FileSystemFileHandle objects can't be JSON/localStorage'd, but they survive
-  // structured-clone into IndexedDB. Used for "auto-sync to plan.js".
-  const IDB_NAME = "mealtracker", IDB_STORE = "handles", PLAN_HANDLE_KEY = "planFile";
-  function idb() {
-    return new Promise((res, rej) => {
-      const r = indexedDB.open(IDB_NAME, 1);
-      r.onupgradeneeded = () => r.result.createObjectStore(IDB_STORE);
-      r.onsuccess = () => res(r.result);
-      r.onerror = () => rej(r.error);
-    });
-  }
-  function idbGet(key) {
-    return idb().then((db) => new Promise((res, rej) => {
-      const tx = db.transaction(IDB_STORE, "readonly").objectStore(IDB_STORE).get(key);
-      tx.onsuccess = () => res(tx.result || null);
-      tx.onerror = () => rej(tx.error);
-    })).catch(() => null);
-  }
-  function idbSet(key, val) {
-    return idb().then((db) => new Promise((res, rej) => {
-      const tx = db.transaction(IDB_STORE, "readwrite").objectStore(IDB_STORE).put(val, key);
-      tx.onsuccess = () => res(true);
-      tx.onerror = () => rej(tx.error);
-    })).catch(() => false);
-  }
-
   function read(key) {
     try {
       const raw = localStorage.getItem(key);
@@ -157,10 +130,6 @@ window.Store = (function () {
     syncInit, // pull remote → cache, then fire onSync
     cloudPush,
 
-    // Linked plan.js file handle (for auto-sync). Promise<handle|null>.
-    getPlanFileHandle: () => idbGet(PLAN_HANDLE_KEY),
-    setPlanFileHandle: (h) => idbSet(PLAN_HANDLE_KEY, h),
-
     // Weight display unit. Defaults to "kg"; weights themselves stay in kg.
     getUnit: () => localStorage.getItem(UNIT_KEY) || "kg",
     setUnit: (u) => {
@@ -196,7 +165,6 @@ window.Store = (function () {
       localStorage.removeItem(WEIGHTS_KEY);
       localStorage.removeItem(FOODS_KEY);
       localStorage.removeItem(UNIT_KEY);
-      idbSet(PLAN_HANDLE_KEY, null);
       signOut();
     },
   };
