@@ -49,7 +49,9 @@
   })();
   let tab = "quick"; // quick | custom
   let lastSlot = SLOTS[0]; // section a freshly-added custom food lands in
-  let authMsg = ""; // transient cloud-sync status/error message
+  let authMsg = "";      // transient cloud-sync status/error message
+  let authReady = false; // has the Firebase SDK reported initial auth state yet?
+  let localOnly = false; // user chose to skip login and use this device only
   // Auto-sync to plan.js via the File System Access API. The user links the file
   // once (handle persisted in IndexedDB via Store); custom adds then write to it.
   // Browsers without the API fall back to downloading plan.js.
@@ -71,7 +73,7 @@
   // state: on sign-in/restore, pull remote data; always re-render to update the
   // sync panel. Also re-pull when the tab regains focus (e.g. switching devices).
   function wireAuth() {
-    window.FBAuth.onChange(() => { authMsg = ""; window.Store.syncInit(); render(); });
+    window.FBAuth.onChange(() => { authReady = true; authMsg = ""; window.Store.syncInit(); render(); });
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden) window.Store.syncInit();
     });
@@ -335,10 +337,38 @@
     });
   }
 
+  // Login gate. When sync is configured and the user hasn't signed in (and hasn't
+  // chosen local-only), show the login screen instead of the app.
+  function renderLogin() {
+    const wrap = el("div", { class: "wrap login" });
+    const card = el("div", { class: "loginCard" },
+      el("div", { class: "eyebrow lime" }, "2-Week Lean Bulk"),
+      el("h1", null, "Meal Log"),
+      el("div", { class: "sub" }, "Sign in to sync your meals & weight across every device.")
+    );
+    const ready = authReady && window.Store.isSyncReady();
+    const btn = el("button", { class: "addBtn", style: "margin-top:20px", onClick: async () => {
+      authMsg = "Opening Google sign-in…"; render();
+      try { await window.Store.signInWithGoogle(); authMsg = ""; render(); } // onChange renders the app
+      catch (e) { authMsg = authError(e && (e.code || e.message)); render(); }
+    } }, ready ? "Sign in with Google" : "Loading sign-in…");
+    if (!ready) btn.setAttribute("disabled", "true");
+    card.appendChild(btn);
+    if (authMsg) card.appendChild(el("div", { class: "sub", style: "margin-top:10px" }, authMsg));
+    card.appendChild(el("button", { class: "linklike",
+      onClick: () => { localOnly = true; render(); } }, "Use on this device only"));
+    wrap.appendChild(card);
+    return wrap;
+  }
+
   // ---- render ----
   function render() {
     const root = document.getElementById("root");
     root.innerHTML = "";
+    if (window.Store.isSyncConfigured() && !localOnly && !window.Store.getUser()) {
+      root.appendChild(renderLogin());
+      return;
+    }
     const tt = totals();
 
     const wrap = el("div", { class: "wrap" });
