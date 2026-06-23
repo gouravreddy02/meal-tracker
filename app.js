@@ -4,7 +4,6 @@
 // ============================================================
 
 (function () {
-  const T = window.PLAN.targets;
   const P = window.PLAN;
 
   // ---- date helpers ----
@@ -14,17 +13,70 @@
     const [y, m, dd] = s.split("-").map(Number);
     return new Date(y, m - 1, dd);
   };
-  const DAYS = Array.from({ length: P.numDays }, (_, i) => {
-    const d = parseKey(P.startDate);
-    d.setDate(d.getDate() + i);
-    return d;
-  });
 
-  // Meal slots, in display order. Logged items carry their slot in `s`; items
-  // with no/unknown slot (e.g. logged before this feature) fall into "Unsorted".
+  // Meal slots, in display order. Logged items carry their slot in `s`.
   const SLOTS = Object.keys(P.foods);
-  const UNSORTED = "Unsorted";
-  const ALL_SLOTS = [...SLOTS, UNSORTED];
+
+  // ---- diet cycles ----
+  // A cycle is a diet block spanning `weeks` weeks with its own macro targets.
+  // PLAN provides the seed (Cycle 1); once the user creates more, the whole array
+  // is persisted via Store. Cycles are non-overlapping date ranges, so the log
+  // page is just a view over the date-keyed logs/weights plus the cycle's targets.
+  function seedCycle() {
+    return { id: "c1", name: "Cycle 1", startDate: P.startDate,
+      weeks: Math.max(1, Math.round(P.numDays / 7)), targets: { ...P.targets } };
+  }
+  // All Date objects spanned by a cycle (length weeks*7), in order.
+  function cycleDays(cy) {
+    return Array.from({ length: cy.weeks * 7 }, (_, i) => {
+      const d = parseKey(cy.startDate);
+      d.setDate(d.getDate() + i);
+      return d;
+    });
+  }
+  // The 7 Date objects of week `w` (0-based) within a cycle.
+  const weekDays = (cy, w) => cycleDays(cy).slice(w * 7, w * 7 + 7);
+  // First/last date keys of a cycle (string compare works on YYYY-MM-DD).
+  function cycleRange(cy) {
+    const ds = cycleDays(cy).map(keyFor);
+    return { start: ds[0], end: ds[ds.length - 1] };
+  }
+  // Today if it falls within the given days, else the first day.
+  function todayOrFirst(days) {
+    const keys = days.map(keyFor), today = keyFor(new Date());
+    return keys.includes(today) ? today : keys[0];
+  }
+  // The cycle whose range contains today, or null when today is outside them all.
+  function currentCycleId() {
+    const today = keyFor(new Date());
+    const cy = cycles.find((c) => { const r = cycleRange(c); return today >= r.start && today <= r.end; });
+    return cy ? cy.id : null;
+  }
+
+  let cycles = window.Store.getCycles() || [seedCycle()];
+  let view = "log";       // "log" | "cycles"
+  let activeCycleId, activeWeek; // which cycle/week the log page is showing
+  let expandedId = null;  // cycle expanded in the Cycles list
+  let newCycle = null;    // draft for the "new cycle" form, or null when closed
+  // Land on the cycle/week containing today, else the most recent cycle's last week.
+  (function initActive() {
+    const id = currentCycleId();
+    if (id) {
+      const cy = cycles.find((c) => c.id === id);
+      activeCycleId = id;
+      activeWeek = Math.floor(cycleDays(cy).map(keyFor).indexOf(keyFor(new Date())) / 7);
+    } else {
+      const last = cycles[cycles.length - 1];
+      activeCycleId = last.id;
+      activeWeek = last.weeks - 1;
+    }
+    expandedId = activeCycleId;
+  })();
+  // The cycle currently shown on the log page (fallback keeps things sane if an
+  // id goes stale after a cloud sync replaces the cycles array).
+  function activeCycle() { return cycles.find((c) => c.id === activeCycleId) || cycles[cycles.length - 1]; }
+  // activeWeek clamped to the active cycle's range.
+  const curWeek = () => Math.min(Math.max(0, activeWeek), activeCycle().weeks - 1);
 
   // ---- state ----
   let logs = window.Store.getLogs();
@@ -43,11 +95,11 @@
   // Quick-add foods: the user's saved arrangement, or a fresh copy of the
   // PLAN default the first time. Reordered via drag, then persisted.
   let foods = window.Store.getFoods() || JSON.parse(JSON.stringify(P.foods));
-  let selected = (function () {
-    const today = keyFor(new Date());
-    return DAYS.some((d) => keyFor(d) === today) ? today : keyFor(DAYS[0]);
-  })();
+  let selected = todayOrFirst(weekDays(activeCycle(), curWeek()));
   let tab = "quick"; // quick | custom
+  let editQty = null; // { slot, i } of the quick-add food whose qty box is being edited
+  // Quantity display: drop a trailing ".0" so whole numbers stay clean.
+  const fmtQ = (n) => (Number.isInteger(n) ? String(n) : String(Math.round(n * 100) / 100));
   let lastSlot = SLOTS[0]; // section a freshly-added custom food lands in
   let authMsg = "";      // transient cloud-sync status/error message
   let authReady = false; // has the Firebase SDK reported initial auth state yet?
@@ -58,6 +110,12 @@
     logs = window.Store.getLogs();
     weights = window.Store.getWeights();
     foods = window.Store.getFoods() || JSON.parse(JSON.stringify(P.foods));
+    cycles = window.Store.getCycles() || [seedCycle()];
+    if (!cycles.some((c) => c.id === activeCycleId)) {
+      const last = cycles[cycles.length - 1];
+      activeCycleId = last.id; activeWeek = last.weeks - 1;
+    }
+    selected = todayOrFirst(weekDays(activeCycle(), curWeek()));
     unit = window.Store.getUnit();
     render();
   });
@@ -79,11 +137,14 @@
   const dayItems = () => logs[selected] || [];
   const totals = () =>
     dayItems().reduce(
-      (a, it) => ({ c: a.c + it.c, p: a.p + it.p, cb: a.cb + it.cb, f: a.f + it.f }),
+      (a, it) => {
+        const q = it.q || 1;
+        return { c: a.c + it.c * q, p: a.p + it.p * q, cb: a.cb + it.cb * q, f: a.f + it.f * q };
+      },
       { c: 0, p: 0, cb: 0, f: 0 }
     );
-  const weekAvg = (start, end) => {
-    const vals = DAYS.slice(start, end)
+  const weekAvg = (days) => {
+    const vals = days
       .map((d) => weights[keyFor(d)])
       .filter((v) => typeof v === "number" && v > 0);
     if (!vals.length) return null;
@@ -111,51 +172,106 @@
     saveLogs();
     render();
   }
-  // Group the day's flat item list by slot, preserving array order within each
-  // slot. Returns { slot: [item, ...] } for every slot in ALL_SLOTS.
-  function buildGroups() {
-    const g = {};
-    ALL_SLOTS.forEach((s) => (g[s] = []));
-    dayItems().forEach((it) => {
-      const s = it.s && g[it.s] ? it.s : UNSORTED;
-      g[s].push(it);
-    });
-    return g;
+  // Identity of a quick-add food, used to tell whether it's already logged for
+  // the selected day (and to find which logged item to remove when toggled off).
+  const foodKey = (p) => `${p.n}|${p.c}|${p.p}|${p.cb}|${p.f}`;
+  const isLogged = (slot, p) =>
+    dayItems().some((it) => it.s === slot && foodKey(it) === foodKey(p));
+  // Macros are stored "per base amount" `b` (default 1 — a single serving).
+  // Effective macros = stored macros × multiplier `q`. The red box shows the
+  // *amount* the user thinks in (q × b): servings for plan foods, or grams for
+  // custom foods whose macros were entered per N grams.
+  function snapItem(slot, p, q) {
+    return { n: p.n, c: p.c, p: p.p, cb: p.cb, f: p.f, s: slot, q, b: p.b || 1 };
   }
-  // Flatten groups back to one array in slot order (normalizes storage order).
-  function flattenGroups(g) {
-    const flat = [];
-    ALL_SLOTS.forEach((s) => (g[s] || []).forEach((it) => flat.push(it)));
-    return flat;
-  }
-  function commitGroups(g) {
-    logs = { ...logs, [selected]: flattenGroups(g) };
+  // Tap a quick-add food to log it (at its default amount); tap green to un-log.
+  function toggleFood(slot, p) {
+    const items = dayItems();
+    const idx = items.findIndex((it) => it.s === slot && foodKey(it) === foodKey(p));
+    if (idx === -1) {
+      addItem(snapItem(slot, p, p.q || 1));
+      return;
+    }
+    const next = items.slice();
+    next.splice(idx, 1);
+    logs = { ...logs, [selected]: next };
     saveLogs();
     render();
   }
-  function removeBy(slot, idx) {
-    const g = buildGroups();
-    g[slot].splice(idx, 1);
-    commitGroups(g);
+  // Base amount the macros are quoted per. Logged items carry their own snapshot.
+  function baseOf(slot, p) {
+    const it = dayItems().find((x) => x.s === slot && foodKey(x) === foodKey(p));
+    return (it ? it.b : p.b) || 1;
   }
-  // Move an item from (fromSlot, fromIdx) to position toIdx within toSlot.
-  function moveItem(fromSlot, fromIdx, toSlot, toIdx) {
-    const g = buildGroups();
-    const [moved] = g[fromSlot].splice(fromIdx, 1);
-    if (!moved) return render();
-    if (toSlot === UNSORTED) delete moved.s;
-    else moved.s = toSlot;
-    g[toSlot].splice(toIdx, 0, moved);
-    commitGroups(g);
+  // Multiplier: the logged day's value, or the food's default when not logged.
+  function qtyOf(slot, p) {
+    const it = dayItems().find((x) => x.s === slot && foodKey(x) === foodKey(p));
+    return (it ? it.q : p.q) || 1;
+  }
+  // Amount shown in the red box = multiplier × base amount.
+  const amountOf = (slot, p) => qtyOf(slot, p) * baseOf(slot, p);
+  // Commit an edited amount for the selected day only. The typed value is an
+  // amount (q × b); convert back to a multiplier. If the food is already logged,
+  // update that day's amount; otherwise log it at that amount.
+  function commitQty(slot, i, val) {
+    const p = foods[slot][i];
+    const base = baseOf(slot, p);
+    let amt = parseFloat(val);
+    if (!isFinite(amt) || amt <= 0) amt = base; // fall back to one base unit
+    const q = Math.round((amt / base) * 1000) / 1000;
+    editQty = null;
+    const items = dayItems();
+    const idx = items.findIndex((it) => it.s === slot && foodKey(it) === foodKey(p));
+    if (idx >= 0) {
+      const next = items.slice();
+      next[idx] = { ...next[idx], q };
+      logs = { ...logs, [selected]: next };
+      saveLogs();
+      render();
+    } else {
+      addItem(snapItem(slot, p, q));
+    }
   }
 
   function saveFoods() { flash(window.Store.setFoods(foods)); }
-  // Move a quick-add food from (fromSlot, fromIdx) to toIdx within toSlot.
-  function moveFood(fromSlot, fromIdx, toSlot, toIdx) {
+  // A quick-add food is hidden on the selected day if it was deleted on or
+  // before it. `to` is the day the deletion takes effect; earlier days keep it.
+  const isHidden = (p) => !!p.to && selected >= p.to;
+  // Move a quick-add food. `fromIdx` is its real index in foods[fromSlot];
+  // `toVis` is the drop position among the *visible* foods in toSlot (some may
+  // be hidden on this day), so map it back to a real array index before insert.
+  function moveFood(fromSlot, fromIdx, toSlot, toVis) {
     const [moved] = foods[fromSlot].splice(fromIdx, 1);
     if (!moved) return render();
-    (foods[toSlot] = foods[toSlot] || []).splice(toIdx, 0, moved);
+    const arr = (foods[toSlot] = foods[toSlot] || []);
+    let count = 0, realTo = arr.length;
+    for (let i = 0; i < arr.length; i++) {
+      if (isHidden(arr[i])) continue;
+      if (count === toVis) { realTo = i; break; }
+      count++;
+    }
+    arr.splice(realTo, 0, moved);
     saveFoods();
+    render();
+  }
+  // Delete a quick-add food from the selected day onward: hide it from `selected`
+  // on, and drop any logged copies on the selected day and later days within the
+  // window. Earlier days keep both the food and its logs untouched.
+  function deleteFood(slot, p) {
+    const idx = foods[slot].indexOf(p);
+    if (idx < 0) return;
+    foods[slot] = foods[slot].slice();
+    foods[slot][idx] = { ...p, to: selected };
+    saveFoods();
+    let changed = false;
+    const next = { ...logs };
+    cycleDays(activeCycle()).forEach((d) => {
+      const k = keyFor(d);
+      if (k < selected || !next[k]) return;
+      const filtered = next[k].filter((it) => !(it.s === slot && foodKey(it) === foodKey(p)));
+      if (filtered.length !== next[k].length) { next[k] = filtered; changed = true; }
+    });
+    if (changed) { logs = next; saveLogs(); }
     render();
   }
   let wT = null;
@@ -195,14 +311,12 @@
   // grids). A ctx describes the DOM shape + how to commit a move:
   //   { bodySel, itemSel, grid, onBegin?, commit }
   // Works with touch and mouse via pointer events; no libraries.
-  const logDragCtx = { bodySel: ".sectionBody", itemSel: ".item", grid: false,
-    onBegin: revealEmptySections, commit: moveItem };
   const foodDragCtx = { bodySel: ".presets", itemSel: ".preset", grid: true,
     onBegin: null, commit: moveFood };
 
   function makeDraggable(card, slot, idx, ctx) {
     card.addEventListener("pointerdown", (e) => {
-      if (drag.active || e.target.closest(".x")) return; // ignore delete button
+      if (drag.active || e.target.closest(".x, .qty, .qinput, .pdel")) return; // ignore qty box + delete
       const sx = e.clientX, sy = e.clientY;
       let holdT = setTimeout(() => { teardown(); beginDrag(card, slot, idx, ctx, sx, sy); }, 250);
       const onMove = (ev) => {
@@ -310,25 +424,6 @@
     ctx.commit(fromSlot, fromIdx, toSlot, toIdx);
   }
 
-  // Inject empty placeholder sections for slots that have no items right now,
-  // so there's always somewhere to drop while dragging the log.
-  function revealEmptySections() {
-    const listEl = document.getElementById("logList");
-    if (!listEl) return;
-    SLOTS.forEach((slot, si) => {
-      if (listEl.querySelector(`.logSection[data-slot="${slot}"]`)) return;
-      const section = el("div", { class: "logSection", "data-slot": slot },
-        el("div", { class: "slotTitle" }, slot),
-        el("div", { class: "sectionBody", "data-slot": slot },
-          el("div", { class: "dropHint" }, "Drop here")));
-      let before = null;
-      for (const sec of listEl.querySelectorAll(".logSection")) {
-        if (ALL_SLOTS.indexOf(sec.getAttribute("data-slot")) > si) { before = sec; break; }
-      }
-      listEl.insertBefore(section, before);
-    });
-  }
-
   // Login gate. When sync is configured and the user hasn't signed in (and hasn't
   // chosen local-only), show the login screen instead of the app.
   function renderLogin() {
@@ -353,6 +448,108 @@
     return wrap;
   }
 
+  // ---- cycles view ----
+  const fmtDate = (key) => parseKey(key).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const fmtRange = (r) => `${fmtDate(r.start)} – ${fmtDate(r.end)}`;
+
+  // The "+ New cycle" form. Prefilled from the latest cycle (the reassess step):
+  // its targets are copied so the user tweaks, and it starts the day after the
+  // previous cycle ends.
+  function newCycleForm() {
+    const name = el("input", { class: "ci", placeholder: "Cycle name", value: `Cycle ${cycles.length + 1}` });
+    const sd = el("input", { class: "ci", type: "date", value: newCycle.startDate });
+    const wks = el("input", { class: "ci", inputmode: "numeric", placeholder: "weeks", value: String(newCycle.weeks) });
+    const cc = el("input", { class: "ci", inputmode: "numeric", placeholder: "cal", value: String(newCycle.targets.cal) });
+    const cp = el("input", { class: "ci", inputmode: "numeric", placeholder: "protein", value: String(newCycle.targets.protein) });
+    const ccb = el("input", { class: "ci", inputmode: "numeric", placeholder: "carbs", value: String(newCycle.targets.carbs) });
+    const cf = el("input", { class: "ci", inputmode: "numeric", placeholder: "fat", value: String(newCycle.targets.fat) });
+    return el("div", { class: "customBox" },
+      el("div", { class: "slotTitle" }, "New cycle"),
+      name,
+      el("div", { class: "crow" }, sd, wks),
+      el("div", { class: "crow" }, cc, cp),
+      el("div", { class: "crow" }, ccb, cf),
+      el("div", { class: "crow" },
+        el("button", { class: "tool", onClick: () => { newCycle = null; render(); } }, "Cancel"),
+        el("button", { class: "addBtn", onClick: () => {
+          const weeks = Math.max(1, Math.round(+wks.value) || 1);
+          const cyNew = {
+            id: "c" + Date.now(),
+            name: name.value.trim() || `Cycle ${cycles.length + 1}`,
+            startDate: sd.value || newCycle.startDate,
+            weeks,
+            targets: { cal: +cc.value || 0, protein: +cp.value || 0, carbs: +ccb.value || 0, fat: +cf.value || 0 },
+          };
+          cycles = [...cycles, cyNew]; // seed Cycle 1 is already in the array
+          window.Store.setCycles(cycles);
+          activeCycleId = cyNew.id; activeWeek = 0;
+          selected = todayOrFirst(weekDays(cyNew, 0));
+          newCycle = null; view = "log"; render();
+        } }, "Create cycle")
+      )
+    );
+  }
+
+  function renderCycles() {
+    const wrap = el("div", { class: "wrap" });
+    wrap.appendChild(
+      el("div", { class: "header" },
+        el("div", null,
+          el("div", { class: "eyebrow lime" }, "Diet plan"),
+          el("h1", null, "Cycles")
+        ),
+        el("button", { class: "tool", onClick: () => { newCycle = null; view = "log"; render(); } }, "Done")
+      )
+    );
+
+    if (newCycle) {
+      wrap.appendChild(newCycleForm());
+    } else {
+      wrap.appendChild(el("button", { class: "addBtn", onClick: () => {
+        const last = cycles[cycles.length - 1];
+        const after = parseKey(cycleRange(last).end);
+        after.setDate(after.getDate() + 1); // contiguous with the previous cycle
+        newCycle = { startDate: keyFor(after), weeks: last.weeks, targets: { ...last.targets } };
+        render();
+      } }, "+ New cycle"));
+    }
+
+    const nowId = currentCycleId();
+    // Newest cycle on top.
+    cycles.slice().reverse().forEach((cy) => {
+      const r = cycleRange(cy);
+      const isCurrent = cy.id === nowId;
+      const expanded = expandedId === cy.id;
+      wrap.appendChild(
+        el("div", { class: "cycleRow" + (isCurrent ? " current" : ""),
+          onClick: () => { expandedId = expanded ? null : cy.id; render(); } },
+          el("div", { class: "cycleMeta" },
+            el("div", { class: "cycleName" }, cy.name,
+              isCurrent ? el("span", { class: "curTag" }, "now") : ""),
+            el("div", { class: "sub" }, `${fmtRange(r)} · ${cy.weeks} wk · ${cy.targets.cal.toLocaleString()} cal`)
+          ),
+          el("div", { class: "chev" }, expanded ? "▾" : "▸")
+        )
+      );
+      if (!expanded) return;
+      for (let w = 0; w < cy.weeks; w++) {
+        const wd = weekDays(cy, w);
+        const wr = { start: keyFor(wd[0]), end: keyFor(wd[6]) };
+        wrap.appendChild(
+          el("div", { class: "weekRow", onClick: () => {
+            activeCycleId = cy.id; activeWeek = w;
+            selected = todayOrFirst(wd);
+            view = "log"; render();
+          } },
+            el("span", { class: "weekName" }, `Week ${w + 1}`),
+            el("span", { class: "sub" }, fmtRange(wr))
+          )
+        );
+      }
+    });
+    return wrap;
+  }
+
   // ---- render ----
   function render() {
     const root = document.getElementById("root");
@@ -361,6 +558,11 @@
       root.appendChild(renderLogin());
       return;
     }
+    if (view === "cycles") { root.appendChild(renderCycles()); return; }
+
+    const cy = activeCycle();
+    const week = curWeek();
+    const T = cy.targets; // active cycle's macro targets drive the whole log page
     const tt = totals();
 
     const wrap = el("div", { class: "wrap" });
@@ -369,17 +571,33 @@
     wrap.appendChild(
       el("div", { class: "header" },
         el("div", null,
-          el("div", { class: "eyebrow" }, "2-Week Lean Bulk"),
-          el("h1", null, "Meal Log"),
+          el("button", { class: "backbtn", onClick: () => { view = "cycles"; expandedId = cy.id; render(); } }, "‹ Cycles"),
+          el("h1", null, cy.name),
           el("div", { class: "sub" }, `Target ${T.cal.toLocaleString()} cal · ${T.protein}g protein floor`)
         ),
         el("div", { id: "saveBadge", class: "badge" })
       )
     );
 
+    // week navigation within the cycle
+    const goWeek = (w) => {
+      activeWeek = Math.min(Math.max(0, w), cy.weeks - 1);
+      selected = todayOrFirst(weekDays(cy, activeWeek));
+      render();
+    };
+    const prevBtn = el("button", { class: "wkarrow", onClick: () => goWeek(week - 1) }, "‹");
+    if (week === 0) prevBtn.setAttribute("disabled", "true");
+    const nextBtn = el("button", { class: "wkarrow", onClick: () => goWeek(week + 1) }, "›");
+    if (week === cy.weeks - 1) nextBtn.setAttribute("disabled", "true");
+    wrap.appendChild(el("div", { class: "wknav" },
+      prevBtn,
+      el("div", { class: "wklabel" }, `Week ${week + 1} of ${cy.weeks}`),
+      nextBtn
+    ));
+
     // day strip
     const strip = el("div", { class: "strip" });
-    DAYS.forEach((d) => {
+    weekDays(cy, week).forEach((d) => {
       const k = keyFor(d);
       const active = k === selected;
       const logged = (logs[k] || []).length > 0;
@@ -418,66 +636,88 @@
     card.appendChild(macroBar("Fat", tt.f, T.fat, "var(--orange)"));
     wrap.appendChild(card);
 
-    // logged list — grouped by slot; press-and-hold a card to reorder or move it
-    const list = el("div", { class: "list", id: "logList" });
-    if (dayItems().length === 0) {
-      list.appendChild(el("div", { class: "empty" }, "Nothing logged yet. Tap a food below to add it."));
-    } else {
-      const groups = buildGroups();
-      ALL_SLOTS.forEach((slot) => {
-        const items = groups[slot];
-        if (!items.length) return; // empty sections appear only while dragging
-        const body = el("div", { class: "sectionBody", "data-slot": slot });
-        items.forEach((it, i) => {
-          const card = el("div", { class: "item draggable", "data-slot": slot },
-            el("div", { class: "grip" }, "⠿"),
-            el("div", { class: "itemInfo" },
-              el("div", { class: "iname" }, it.n),
-              el("div", { class: "imacros" }, `${it.c} cal · ${it.p}p · ${it.cb}c · ${it.f}f`)
-            ),
-            el("button", { class: "x", onClick: () => removeBy(slot, i) }, "×")
-          );
-          makeDraggable(card, slot, i, logDragCtx);
-          body.appendChild(card);
-        });
-        list.appendChild(
-          el("div", { class: "logSection", "data-slot": slot },
-            el("div", { class: "slotTitle" }, slot), body)
-        );
-      });
-    }
-    wrap.appendChild(list);
-
     // tabs
     wrap.appendChild(
       el("div", { class: "tabs" },
-        el("button", { class: "tab" + (tab === "quick" ? " active" : ""), onClick: () => { tab = "quick"; render(); } }, "Quick add"),
-        el("button", { class: "tab" + (tab === "custom" ? " active" : ""), onClick: () => { tab = "custom"; render(); } }, "Custom")
+        el("button", { class: "tab" + (tab === "quick" ? " active" : ""), onClick: () => { tab = "quick"; render(); } }, "Log items"),
+        el("button", { class: "tab" + (tab === "custom" ? " active" : ""), onClick: () => { tab = "custom"; render(); } }, "Add items"),
+        el("button", { class: "tab" + (tab === "remove" ? " active" : ""), onClick: () => { tab = "remove"; render(); } }, "Remove items")
       )
     );
 
     if (tab === "quick") {
-      Object.entries(foods).forEach(([slot, items]) => {
+      SLOTS.forEach((slot) => {
+        const items = foods[slot] || [];
         wrap.appendChild(el("div", { class: "slotTitle" }, slot));
         const grid = el("div", { class: "presets", "data-slot": slot });
         items.forEach((p, i) => {
-          const btn = el("button", { class: "preset draggable",
-            onClick: () => addItem({ n: p.n, c: p.c, p: p.p, cb: p.cb, f: p.f, s: slot }) },
-            el("span", { class: "pn" }, p.n),
-            el("span", { class: "pc" }, String(p.c))
+          if (isHidden(p)) return; // deleted from this day onward
+          const logged = isLogged(slot, p);
+          let qtyEl;
+          if (editQty && editQty.slot === slot && editQty.i === i) {
+            let cancelled = false;
+            const inp = el("input", { class: "qinput", inputmode: "decimal", value: fmtQ(amountOf(slot, p)),
+              onClick: (e) => e.stopPropagation(),
+              onBlur: (e) => { if (!cancelled) commitQty(slot, i, e.target.value); },
+              onKeydown: (e) => {
+                if (e.key === "Enter") e.target.blur();
+                else if (e.key === "Escape") { cancelled = true; editQty = null; render(); }
+              } });
+            setTimeout(() => { inp.focus(); inp.select(); }, 0);
+            qtyEl = inp;
+          } else {
+            qtyEl = el("div", { class: "qty",
+              onClick: (e) => { e.stopPropagation(); editQty = { slot, i }; render(); } }, fmtQ(amountOf(slot, p)));
+          }
+          const btn = el("div", { class: "preset draggable" + (logged ? " logged" : ""),
+            onClick: () => toggleFood(slot, p) },
+            qtyEl,
+            el("div", { class: "pbody" },
+              el("span", { class: "pn" }, p.n),
+              el("span", { class: "pc" }, String(Math.round(p.c * qtyOf(slot, p))))
+            )
           );
           makeDraggable(btn, slot, i, foodDragCtx);
           grid.appendChild(btn);
         });
-        if (!items.length) grid.appendChild(el("div", { class: "dropHint" }, "Drop here"));
+        if (!grid.children.length) grid.appendChild(el("div", { class: "dropHint" }, "Drop here"));
         wrap.appendChild(grid);
       });
+    } else if (tab === "remove") {
+      // Removal interface: every food shows an × that deletes it from this day
+      // onward (earlier days keep it). No tap-to-log, qty editing, or reordering.
+      let any = false;
+      SLOTS.forEach((slot) => {
+        const visible = (foods[slot] || []).filter((p) => !isHidden(p));
+        if (!visible.length) return;
+        any = true;
+        wrap.appendChild(el("div", { class: "slotTitle" }, slot));
+        const grid = el("div", { class: "presets", "data-slot": slot });
+        visible.forEach((p) => {
+          grid.appendChild(
+            el("div", { class: "preset removing" },
+              el("div", { class: "pbody" },
+                el("span", { class: "pn" }, p.n),
+                el("span", { class: "pc" }, String(p.c))
+              ),
+              el("button", { class: "pdel", title: "Delete from here on",
+                onClick: () => {
+                  if (confirm(`Delete "${p.n}" from this day onward? Earlier days keep it.`)) deleteFood(slot, p);
+                } }, "×")
+            )
+          );
+        });
+        wrap.appendChild(grid);
+      });
+      if (!any) wrap.appendChild(el("div", { class: "empty" }, "No foods to remove."));
     } else {
       const cn = el("input", { class: "ci", placeholder: "Food name" });
+      const cbase = el("input", { class: "ci", inputmode: "decimal", placeholder: "macros are per… (e.g. 50)" });
       const cc = el("input", { class: "ci", inputmode: "numeric", placeholder: "cal" });
       const cp = el("input", { class: "ci", inputmode: "numeric", placeholder: "protein" });
       const ccb = el("input", { class: "ci", inputmode: "numeric", placeholder: "carbs" });
       const cf = el("input", { class: "ci", inputmode: "numeric", placeholder: "fat" });
+      const cdef = el("input", { class: "ci", inputmode: "decimal", placeholder: "default amount (e.g. 200)" });
       const cs = el("select", { class: "ci", onChange: (e) => { lastSlot = e.target.value; } });
       SLOTS.forEach((s) => {
         const opt = el("option", { value: s }, s);
@@ -487,17 +727,24 @@
       wrap.appendChild(
         el("div", { class: "customBox" },
           cn,
+          cbase,
           el("div", { class: "crow" }, cc, cp),
           el("div", { class: "crow" }, ccb, cf),
+          cdef,
           cs,
           el("button", { class: "addBtn", onClick: () => {
             const name = cn.value.trim();
             if (!name) return;
-            const food = { n: name, c: +cc.value || 0, p: +cp.value || 0, cb: +ccb.value || 0, f: +cf.value || 0 };
+            // Macros are entered per `base` units; `def` is the default amount to
+            // log. The food's default multiplier is def/base (e.g. 200/50 = 4×).
+            const base = +cbase.value || 1;
+            const def = +cdef.value || base;
+            const food = { n: name, c: +cc.value || 0, p: +cp.value || 0, cb: +ccb.value || 0, f: +cf.value || 0,
+              b: base, q: Math.round((def / base) * 1000) / 1000 };
             addItem({ ...food, s: lastSlot });
             // Also save to Quick add for this slot, skipping exact duplicates.
             const slotFoods = foods[lastSlot] = foods[lastSlot] || [];
-            if (!slotFoods.some((q) => q.n === food.n && q.c === food.c && q.p === food.p && q.cb === food.cb && q.f === food.f)) {
+            if (!slotFoods.some((q) => !q.to && q.n === food.n && q.c === food.c && q.p === food.p && q.cb === food.cb && q.f === food.f && (q.b || 1) === food.b)) {
               slotFoods.push(food);
               saveFoods(); // persists locally + syncs to the cloud via Store
             }
@@ -507,18 +754,19 @@
       );
     }
 
-    // weight trend
-    const w1 = weekAvg(0, 7), w2 = weekAvg(7, 14);
-    const trend = el("div", { class: "card trend" },
-      el("div", { class: "eyebrow lime" }, "Weight trend"),
-      el("div", { class: "wcols" },
-        el("div", { class: "wcol" }, el("div", { class: "wctitle" }, "Week 1 avg"),
-          el("div", { class: "wcval" + (w1 != null ? "" : " muted") }, w1 != null ? fmtW(toDisplay(w1)) : "—", el("span", { class: "wcu" }, " " + unit))),
-        el("div", { class: "wcol" }, el("div", { class: "wctitle" }, "Week 2 avg"),
-          el("div", { class: "wcval" + (w2 != null ? "" : " muted") }, w2 != null ? fmtW(toDisplay(w2)) : "—", el("span", { class: "wcu" }, " " + unit)))
-      )
+    // weight trend — first week vs last week of the active cycle
+    const w1 = weekAvg(weekDays(cy, 0));
+    const w2 = cy.weeks > 1 ? weekAvg(weekDays(cy, cy.weeks - 1)) : null;
+    const wcols = el("div", { class: "wcols" },
+      el("div", { class: "wcol" }, el("div", { class: "wctitle" }, cy.weeks > 1 ? "First week avg" : "Week avg"),
+        el("div", { class: "wcval" + (w1 != null ? "" : " muted") }, w1 != null ? fmtW(toDisplay(w1)) : "—", el("span", { class: "wcu" }, " " + unit)))
     );
-    if (w1 != null && w2 != null) {
+    if (cy.weeks > 1) {
+      wcols.appendChild(el("div", { class: "wcol" }, el("div", { class: "wctitle" }, "Last week avg"),
+        el("div", { class: "wcval" + (w2 != null ? "" : " muted") }, w2 != null ? fmtW(toDisplay(w2)) : "—", el("span", { class: "wcu" }, " " + unit))));
+    }
+    const trend = el("div", { class: "card trend" }, el("div", { class: "eyebrow lime" }, "Weight trend"), wcols);
+    if (cy.weeks > 1 && w1 != null && w2 != null) {
       const diffKg = w2 - w1; // advice thresholds are defined in kg
       const diff = fmtW(toDisplay(w2) - toDisplay(w1));
       const advice = diffKg > P.weightGoal.maxGainKg ? "trim 200 cal"

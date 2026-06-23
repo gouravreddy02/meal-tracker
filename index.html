@@ -12,7 +12,7 @@
   <style>
     :root {
       --ink:#1a1626; --panel:#241d35; --lime:#c5f04a; --mute:#8a82a0;
-      --line:#352c4a; --blue:#6ad2ff; --orange:#ff9d6a;
+      --line:#352c4a; --blue:#6ad2ff; --orange:#ff9d6a; --red:#ff5d6c;
     }
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     html, body { margin:0; padding:0; background:var(--ink); }
@@ -42,6 +42,33 @@
     .dot { height:5px; width:5px; border-radius:5px; margin:3px auto 0; background:transparent; }
     .dot.on { background:var(--lime); }
     .day.active .dot.on { background:var(--ink); }
+
+    .backbtn { background:none; border:none; padding:0; font-size:11px; letter-spacing:2px;
+      color:var(--lime); font-weight:700; text-transform:uppercase; cursor:pointer; }
+    .backbtn:active { opacity:.6; }
+
+    /* week navigation within a cycle */
+    .wknav { display:flex; align-items:center; justify-content:center; gap:14px; margin-bottom:12px; }
+    .wklabel { font-size:12px; font-weight:700; color:var(--mute); letter-spacing:1px; }
+    .wkarrow { background:var(--panel); border:1px solid var(--line); color:#fff; cursor:pointer;
+      width:34px; height:34px; border-radius:10px; font-size:18px; line-height:1; }
+    .wkarrow:disabled { opacity:.3; cursor:default; }
+    .wkarrow:active:not(:disabled) { background:var(--lime); color:var(--ink); }
+
+    /* cycles list view */
+    .cycleRow { display:flex; align-items:center; justify-content:space-between; gap:10px;
+      background:var(--panel); border:1px solid var(--line); border-radius:14px;
+      padding:14px 16px; margin-bottom:10px; cursor:pointer; }
+    .cycleRow.current { border-color:var(--lime); }
+    .cycleName { font-size:16px; font-weight:800; display:flex; align-items:center; gap:8px; }
+    .curTag { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:1px;
+      color:var(--ink); background:var(--lime); padding:2px 7px; border-radius:6px; }
+    .chev { color:var(--mute); font-size:14px; }
+    .weekRow { display:flex; align-items:center; justify-content:space-between;
+      background:transparent; border:1px solid var(--line); border-radius:12px;
+      padding:12px 16px; margin:0 0 10px 16px; cursor:pointer; }
+    .weekRow:active { background:var(--panel); }
+    .weekName { font-size:14px; font-weight:700; }
 
     .card { background:var(--panel); border-radius:18px; padding:18px; border:1px solid var(--line); margin-bottom:16px; }
     .totalsTop { display:flex; align-items:baseline; justify-content:space-between; margin-bottom:14px; }
@@ -88,8 +115,8 @@
       transform:scale(1.03); box-shadow:0 12px 28px rgba(0,0,0,.5); border-color:var(--lime); }
 
     .tabs { display:flex; gap:8px; margin-bottom:12px; }
-    .tab { flex:1; padding:9px; border-radius:11px; cursor:pointer; font-size:13px; font-weight:700;
-      background:var(--panel); color:#fff; border:1px solid var(--line); }
+    .tab { flex:1; padding:9px 6px; border-radius:11px; cursor:pointer; font-size:12px; font-weight:700;
+      white-space:nowrap; background:var(--panel); color:#fff; border:1px solid var(--line); }
     .tab.active { background:var(--lime); color:var(--ink); border-color:var(--lime); }
 
     .slotTitle { font-size:11px; letter-spacing:2px; color:var(--mute); font-weight:700;
@@ -97,12 +124,24 @@
     .slotTitle:first-of-type { margin-top:4px; }
     .presets { display:flex; flex-wrap:wrap; gap:7px; min-height:4px; }
     .presets .dropHint { width:100%; }
-    .preset { background:var(--panel); border:1px solid var(--line); color:#fff; border-radius:11px;
-      padding:9px 12px; font-size:12.5px; cursor:pointer; text-align:left; }
+    .preset { display:flex; align-items:stretch; background:var(--panel); border:1px solid var(--line);
+      color:#fff; border-radius:11px; font-size:12.5px; cursor:pointer; text-align:left; overflow:hidden; }
     .preset.draggable { touch-action:none; user-select:none; -webkit-user-select:none;
       -webkit-touch-callout:none; }
+    .preset.logged { background:var(--lime); border-color:var(--lime); color:var(--ink); }
+    .qty { display:flex; align-items:center; justify-content:center; min-width:34px; padding:0 8px;
+      background:var(--red); color:#fff; font-weight:700; border-right:1px solid var(--line); cursor:text; }
+    .qinput { width:44px; padding:0 4px; border:none; outline:none; background:var(--red); color:#fff;
+      font-weight:700; font-size:12.5px; text-align:center; -moz-appearance:textfield; }
+    .pbody { padding:9px 12px; }
     .pn { font-weight:600; }
     .pc { color:var(--mute); margin-left:6px; }
+    .preset.logged .pc { color:rgba(26,22,38,.6); }
+    .pdel { align-self:stretch; padding:0 9px; border:none; border-left:1px solid var(--line);
+      background:transparent; color:var(--mute); font-size:15px; line-height:1; cursor:pointer; }
+    .preset.logged .pdel { color:rgba(26,22,38,.55); }
+    .preset.removing { cursor:default; }
+    .preset.removing .pdel { color:var(--red); font-weight:700; }
 
     .customBox { background:var(--panel); border-radius:14px; padding:14px; border:1px solid var(--line); }
     .ci { width:100%; background:var(--ink); border:1px solid var(--line); color:#fff;

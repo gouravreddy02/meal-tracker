@@ -16,12 +16,13 @@ window.PLAN = {
     projectId: "meal-tracker-12ca8",
   },
 
-  // Daily targets from the lean-bulk plan
+  // Daily targets + tracking window. These seed "Cycle 1" the first time the app
+  // runs; after that, cycles (their duration + targets) are created and edited in
+  // the app's Cycles page and saved per-device/synced, so editing these values
+  // only affects a fresh install.
   targets: { cal: 3800, protein: 155, carbs: 377, fat: 127 },
-
-  // 14-day tracking window. Change startDate to roll the window forward.
-  startDate: "2026-06-20", // YYYY-MM-DD
-  numDays: 14,
+  startDate: "2026-06-20", // YYYY-MM-DD — Cycle 1 start
+  numDays: 14,             // Cycle 1 length (rounded to whole weeks)
 
   // Weight goal guidance shown in the trend panel
   weightGoal: {
@@ -62,5 +63,7 @@ window.PLAN = {
       { n: "Kimchi 100g", c: 25, p: 2, cb: 4, f: 1 },
       { n: "Sauerkraut 100g", c: 20, p: 1, cb: 4, f: 0 },
     ],
+    // Things grazed on across the day that don't belong to one meal.
+    "All day": [],
   },
 };
