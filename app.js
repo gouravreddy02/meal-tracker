@@ -733,6 +733,17 @@
     }
     wrap.appendChild(weight);
 
+    // ---- backup / restore ----
+    const backup = el("div", { class: "card" },
+      el("div", { class: "eyebrow lime" }, "Backup"),
+      el("div", { class: "sub" }, "Export your data to a file, or restore it from one."),
+      el("div", { class: "tools", style: "margin-top:14px" },
+        el("button", { class: "tool", onClick: exportData }, "Export backup"),
+        el("button", { class: "tool", onClick: importData }, "Import backup")
+      )
+    );
+    wrap.appendChild(backup);
+
     return wrap;
   }
 
@@ -943,13 +954,6 @@
         )
       );
     }
-
-    // data tools
-    const tools = el("div", { class: "tools" },
-      el("button", { class: "tool", onClick: exportData }, "Export backup"),
-      el("button", { class: "tool", onClick: importData }, "Import backup")
-    );
-    wrap.appendChild(tools);
 
     root.appendChild(wrap);
   }
