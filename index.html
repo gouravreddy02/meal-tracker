@@ -32,6 +32,26 @@
     .badge.ok { background:#27331a; color:var(--lime); border:1px solid var(--line); }
     .badge.err { background:#3a1f2a; color:#ff8d8d; border:1px solid #5a2a3a; }
 
+    /* profile */
+    .profBtn { width:42px; height:42px; flex:0 0 auto; border-radius:50%; cursor:pointer;
+      background:var(--panel); color:var(--lime); border:1px solid var(--line);
+      font-size:17px; font-weight:800; display:flex; align-items:center; justify-content:center; }
+    .profBtn:active { background:#1c2417; }
+    .iconBtn { width:42px; height:42px; flex:0 0 auto; border-radius:50%; cursor:pointer;
+      background:var(--panel); color:var(--mute); border:1px solid var(--line);
+      font-size:24px; line-height:1; font-weight:700; display:flex; align-items:center;
+      justify-content:center; padding:0 3px 3px 0; }
+    .iconBtn:active { background:#1c2417; color:var(--lime); }
+    .profEmail { font-size:18px; font-weight:800; margin-top:4px; word-break:break-all; }
+    .statGrid { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; margin-top:14px; }
+    .statTile { background:#11160d; border:1px solid var(--line); border-radius:13px; padding:13px 14px; }
+    .statVal { font-size:23px; font-weight:800; letter-spacing:-0.5px; }
+    .statUnit { font-size:13px; color:var(--mute); font-weight:600; }
+    .statLab { font-size:11px; color:var(--mute); margin-top:3px; letter-spacing:1px; text-transform:uppercase; }
+    .trendRow { display:flex; justify-content:space-between; align-items:baseline;
+      padding:9px 0; border-top:1px solid var(--line); }
+    .trendVal { font-size:16px; font-weight:800; }
+
     .strip { display:flex; gap:7px; overflow-x:auto; padding-bottom:8px; margin-bottom:16px; }
     .strip::-webkit-scrollbar { height:0; }
     .day { flex:0 0 auto; min-width:52px; padding:8px 6px; border-radius:12px; cursor:pointer;
@@ -55,20 +75,42 @@
     .wkarrow:disabled { opacity:.3; cursor:default; }
     .wkarrow:active:not(:disabled) { background:var(--lime); color:var(--ink); }
 
-    /* cycles list view */
-    .cycleRow { display:flex; align-items:center; justify-content:space-between; gap:10px;
-      background:var(--panel); border:1px solid var(--line); border-radius:14px;
-      padding:14px 16px; margin-bottom:10px; cursor:pointer; }
-    .cycleRow.current { border-color:var(--lime); }
-    .cycleName { font-size:16px; font-weight:800; display:flex; align-items:center; gap:8px; }
+    /* weeks list view */
+    /* phase accent colour, set per row/tag via the .ph-* classes */
+    .ph-bulk   { --phase:var(--lime); }
+    .ph-recomp { --phase:var(--blue); }
+    .ph-cut    { --phase:var(--orange); }
+
+    .weekItem { margin-bottom:10px; }
+    .weekRow2 { display:flex; align-items:stretch; justify-content:space-between; gap:10px;
+      background:var(--panel); border:1px solid var(--line); border-left:4px solid var(--phase, var(--line));
+      border-radius:14px; overflow:hidden; }
+    .weekRow2.current { border-color:var(--phase, var(--lime)); border-left-width:4px; }
+    .weekMeta { flex:1; min-width:0; padding:14px 14px; cursor:pointer; }
+    .weekMeta:active { background:var(--ink); }
+    .weekTitle { font-size:16px; font-weight:800; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+    .phaseTag { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:1px;
+      color:var(--phase, var(--lime)); border:1px solid var(--phase, var(--line));
+      padding:2px 7px; border-radius:6px; }
     .curTag { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:1px;
       color:var(--ink); background:var(--lime); padding:2px 7px; border-radius:6px; }
-    .chev { color:var(--mute); font-size:14px; }
-    .weekRow { display:flex; align-items:center; justify-content:space-between;
-      background:transparent; border:1px solid var(--line); border-radius:12px;
-      padding:12px 16px; margin:0 0 10px 16px; cursor:pointer; }
-    .weekRow:active { background:var(--panel); }
-    .weekName { font-size:14px; font-weight:700; }
+    .weekRight { display:flex; align-items:center; gap:6px; padding:0 10px 0 0; }
+    .weekAvg { font-size:18px; font-weight:800; white-space:nowrap; }
+    .weekAvg.muted { color:var(--mute); font-weight:700; }
+    .chevBtn { background:none; border:none; color:var(--mute); font-size:15px; cursor:pointer;
+      padding:8px 6px; line-height:1; }
+    .chevBtn:active { color:var(--lime); }
+
+    /* inline week editor */
+    .weekEditor { background:var(--panel); border:1px solid var(--line); border-top:none;
+      border-radius:0 0 14px 14px; margin-top:-4px; padding:14px; }
+    .edLabel { font-size:11px; letter-spacing:2px; color:var(--mute); font-weight:700;
+      text-transform:uppercase; margin:4px 0 8px; }
+    .edLabel:not(:first-child) { margin-top:14px; }
+    .phasePills { display:flex; gap:8px; }
+    .phasePill { flex:1; padding:9px 6px; border-radius:11px; cursor:pointer; font-size:12px; font-weight:700;
+      background:var(--ink); color:var(--phase, #fff); border:1px solid var(--line); }
+    .phasePill.on { background:var(--phase, var(--lime)); color:var(--ink); border-color:var(--phase, var(--lime)); }
 
     .card { background:var(--panel); border-radius:18px; padding:18px; border:1px solid var(--line); margin-bottom:16px; }
     .totalsTop { display:flex; align-items:baseline; justify-content:space-between; margin-bottom:14px; }

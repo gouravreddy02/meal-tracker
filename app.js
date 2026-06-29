@@ -17,66 +17,110 @@
   // Meal slots, in display order. Logged items carry their slot in `s`.
   const SLOTS = Object.keys(P.foods);
 
-  // ---- diet cycles ----
-  // A cycle is a diet block spanning `weeks` weeks with its own macro targets.
-  // PLAN provides the seed (Cycle 1); once the user creates more, the whole array
-  // is persisted via Store. Cycles are non-overlapping date ranges, so the log
-  // page is just a view over the date-keyed logs/weights plus the cycle's targets.
-  function seedCycle() {
-    return { id: "c1", name: "Cycle 1", startDate: P.startDate,
-      weeks: Math.max(1, Math.round(P.numDays / 7)), targets: { ...P.targets } };
+  // ---- diet weeks ----
+  // The plan is a flat, ordered list of weeks. Each week spans 7 consecutive days
+  // from its `startDate`, owns its own macro targets, and has a `phase`
+  // (bulk/recomp/cut) that sets its accent color and pre-fills suggested targets.
+  // Weeks are non-overlapping date ranges, so the log page is just a view over the
+  // date-keyed logs/weights plus the week's targets.
+  const PHASES = {
+    bulk:   { label: "Bulk",   color: "var(--lime)",   cls: "ph-bulk" },
+    recomp: { label: "Recomp", color: "var(--blue)",   cls: "ph-recomp" },
+    cut:    { label: "Cut",    color: "var(--orange)", cls: "ph-cut" },
+  };
+  const PHASE_ORDER = ["bulk", "recomp", "cut"];
+  const phaseOf = (wk) => (PHASES[wk.phase] ? wk.phase : "bulk");
+  // Suggested targets for a phase, derived from PLAN.targets (treated as the bulk
+  // baseline): recomp/cut step calories down, push protein up and trim carbs.
+  // These only pre-fill the editable target inputs; the user can override.
+  function phaseTargets(phase) {
+    const b = P.targets;
+    const carbsFrom = (cal, protein, fat) => Math.max(0, Math.round((cal - protein * 4 - fat * 9) / 4));
+    if (phase === "recomp") {
+      const cal = Math.round((b.cal * 0.84) / 10) * 10, protein = b.protein + 20, fat = b.fat;
+      return { cal, protein, carbs: carbsFrom(cal, protein, fat), fat };
+    }
+    if (phase === "cut") {
+      const cal = Math.round((b.cal * 0.7) / 10) * 10, protein = b.protein + 40, fat = Math.round(b.fat * 0.8);
+      return { cal, protein, carbs: carbsFrom(cal, protein, fat), fat };
+    }
+    return { ...b }; // bulk
   }
-  // All Date objects spanned by a cycle (length weeks*7), in order.
-  function cycleDays(cy) {
-    return Array.from({ length: cy.weeks * 7 }, (_, i) => {
-      const d = parseKey(cy.startDate);
+
+  // The 7 Date objects of a week, in order.
+  function weekDates(wk) {
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = parseKey(wk.startDate);
       d.setDate(d.getDate() + i);
       return d;
     });
   }
-  // The 7 Date objects of week `w` (0-based) within a cycle.
-  const weekDays = (cy, w) => cycleDays(cy).slice(w * 7, w * 7 + 7);
-  // First/last date keys of a cycle (string compare works on YYYY-MM-DD).
-  function cycleRange(cy) {
-    const ds = cycleDays(cy).map(keyFor);
-    return { start: ds[0], end: ds[ds.length - 1] };
+  // First/last date keys of a week (string compare works on YYYY-MM-DD).
+  function weekRange(wk) {
+    const ds = weekDates(wk).map(keyFor);
+    return { start: ds[0], end: ds[6] };
   }
   // Today if it falls within the given days, else the first day.
   function todayOrFirst(days) {
     const keys = days.map(keyFor), today = keyFor(new Date());
     return keys.includes(today) ? today : keys[0];
   }
-  // The cycle whose range contains today, or null when today is outside them all.
-  function currentCycleId() {
+  // The week whose range contains today, or null when today is outside them all.
+  function currentWeekId() {
     const today = keyFor(new Date());
-    const cy = cycles.find((c) => { const r = cycleRange(c); return today >= r.start && today <= r.end; });
-    return cy ? cy.id : null;
+    const wk = weeks.find((w) => { const r = weekRange(w); return today >= r.start && today <= r.end; });
+    return wk ? wk.id : null;
   }
 
-  let cycles = window.Store.getCycles() || [seedCycle()];
-  let view = "log";       // "log" | "cycles"
-  let activeCycleId, activeWeek; // which cycle/week the log page is showing
-  let expandedId = null;  // cycle expanded in the Cycles list
-  let newCycle = null;    // draft for the "new cycle" form, or null when closed
-  // Land on the cycle/week containing today, else the most recent cycle's last week.
-  (function initActive() {
-    const id = currentCycleId();
-    if (id) {
-      const cy = cycles.find((c) => c.id === id);
-      activeCycleId = id;
-      activeWeek = Math.floor(cycleDays(cy).map(keyFor).indexOf(keyFor(new Date())) / 7);
-    } else {
-      const last = cycles[cycles.length - 1];
-      activeCycleId = last.id;
-      activeWeek = last.weeks - 1;
+  // Seed a fresh plan from PLAN: numDays worth of bulk weeks from startDate.
+  function seedWeeks() {
+    const n = Math.max(1, Math.round(P.numDays / 7));
+    return Array.from({ length: n }, (_, i) => {
+      const d = parseKey(P.startDate);
+      d.setDate(d.getDate() + i * 7);
+      return { id: "w" + (i + 1), startDate: keyFor(d), phase: "bulk", targets: { ...P.targets } };
+    });
+  }
+  // Expand legacy cycles (each `weeks` weeks long) into individual 1-week entries,
+  // defaulted to the bulk phase and carrying the cycle's targets.
+  function migrateCycles(cys) {
+    const out = [];
+    cys.forEach((cy) => {
+      for (let w = 0; w < (cy.weeks || 1); w++) {
+        const d = parseKey(cy.startDate);
+        d.setDate(d.getDate() + w * 7);
+        out.push({ id: cy.id + "_w" + w, startDate: keyFor(d), phase: "bulk", targets: { ...cy.targets } });
+      }
+    });
+    return out;
+  }
+  const sortWeeks = (arr) => arr.slice().sort((a, b) => (a.startDate < b.startDate ? -1 : a.startDate > b.startDate ? 1 : 0));
+  // Load weeks oldest-first; migrate from legacy cycles or seed from PLAN once.
+  function loadWeeks() {
+    let w = window.Store.getWeeks();
+    if (!w || !w.length) {
+      const cys = window.Store.getCycles();
+      w = cys && cys.length ? migrateCycles(cys) : seedWeeks();
+      window.Store.setWeeks(w);
     }
-    expandedId = activeCycleId;
+    return sortWeeks(w);
+  }
+
+  let weeks = loadWeeks();
+  let view = "weeks";     // "log" | "weeks" — land on the diet week plan after login
+  let activeWeekId;       // which week the log page is showing
+  let expandedId = null;  // week expanded in the Weeks list (inline editor)
+  // Land on the week containing today, else the most recent week.
+  (function initActive() {
+    activeWeekId = currentWeekId() || weeks[weeks.length - 1].id;
   })();
-  // The cycle currently shown on the log page (fallback keeps things sane if an
-  // id goes stale after a cloud sync replaces the cycles array).
-  function activeCycle() { return cycles.find((c) => c.id === activeCycleId) || cycles[cycles.length - 1]; }
-  // activeWeek clamped to the active cycle's range.
-  const curWeek = () => Math.min(Math.max(0, activeWeek), activeCycle().weeks - 1);
+  // The week currently shown on the log page (fallback keeps things sane if an id
+  // goes stale after a cloud sync replaces the weeks array).
+  function activeWeek() { return weeks.find((w) => w.id === activeWeekId) || weeks[weeks.length - 1]; }
+  // Index (0-based) of a week in the ordered list — drives the "Week N" labels.
+  const weekIndex = (id) => weeks.findIndex((w) => w.id === id);
+  // Persist + keep the list ordered after any week mutation.
+  function saveWeeks() { weeks = sortWeeks(weeks); flash(window.Store.setWeeks(weeks)); }
 
   // ---- state ----
   let logs = window.Store.getLogs();
@@ -95,7 +139,7 @@
   // Quick-add foods: the user's saved arrangement, or a fresh copy of the
   // PLAN default the first time. Reordered via drag, then persisted.
   let foods = window.Store.getFoods() || JSON.parse(JSON.stringify(P.foods));
-  let selected = todayOrFirst(weekDays(activeCycle(), curWeek()));
+  let selected = todayOrFirst(weekDates(activeWeek()));
   let tab = "quick"; // quick | custom
   let editQty = null; // { slot, i } of the quick-add food whose qty box is being edited
   // Quantity display: drop a trailing ".0" so whole numbers stay clean.
@@ -110,12 +154,9 @@
     logs = window.Store.getLogs();
     weights = window.Store.getWeights();
     foods = window.Store.getFoods() || JSON.parse(JSON.stringify(P.foods));
-    cycles = window.Store.getCycles() || [seedCycle()];
-    if (!cycles.some((c) => c.id === activeCycleId)) {
-      const last = cycles[cycles.length - 1];
-      activeCycleId = last.id; activeWeek = last.weeks - 1;
-    }
-    selected = todayOrFirst(weekDays(activeCycle(), curWeek()));
+    weeks = loadWeeks();
+    if (!weeks.some((w) => w.id === activeWeekId)) activeWeekId = weeks[weeks.length - 1].id;
+    selected = todayOrFirst(weekDates(activeWeek()));
     unit = window.Store.getUnit();
     render();
   });
@@ -265,7 +306,7 @@
     saveFoods();
     let changed = false;
     const next = { ...logs };
-    cycleDays(activeCycle()).forEach((d) => {
+    weekDates(activeWeek()).forEach((d) => {
       const k = keyFor(d);
       if (k < selected || !next[k]) return;
       const filtered = next[k].filter((it) => !(it.s === slot && foodKey(it) === foodKey(p)));
@@ -448,105 +489,250 @@
     return wrap;
   }
 
-  // ---- cycles view ----
+  // ---- weeks view ----
   const fmtDate = (key) => parseKey(key).toLocaleDateString("en-US", { month: "short", day: "numeric" });
   const fmtRange = (r) => `${fmtDate(r.start)} – ${fmtDate(r.end)}`;
 
-  // The "+ New cycle" form. Prefilled from the latest cycle (the reassess step):
-  // its targets are copied so the user tweaks, and it starts the day after the
-  // previous cycle ends.
-  function newCycleForm() {
-    const name = el("input", { class: "ci", placeholder: "Cycle name", value: `Cycle ${cycles.length + 1}` });
-    const sd = el("input", { class: "ci", type: "date", value: newCycle.startDate });
-    const wks = el("input", { class: "ci", inputmode: "numeric", placeholder: "weeks", value: String(newCycle.weeks) });
-    const cc = el("input", { class: "ci", inputmode: "numeric", placeholder: "cal", value: String(newCycle.targets.cal) });
-    const cp = el("input", { class: "ci", inputmode: "numeric", placeholder: "protein", value: String(newCycle.targets.protein) });
-    const ccb = el("input", { class: "ci", inputmode: "numeric", placeholder: "carbs", value: String(newCycle.targets.carbs) });
-    const cf = el("input", { class: "ci", inputmode: "numeric", placeholder: "fat", value: String(newCycle.targets.fat) });
-    return el("div", { class: "customBox" },
-      el("div", { class: "slotTitle" }, "New cycle"),
-      name,
-      el("div", { class: "crow" }, sd, wks),
-      el("div", { class: "crow" }, cc, cp),
-      el("div", { class: "crow" }, ccb, cf),
+  // Jump to a week on the log page.
+  function openWeek(wk) {
+    activeWeekId = wk.id;
+    selected = todayOrFirst(weekDates(wk));
+    view = "log"; expandedId = null; render();
+  }
+  // Append a new week, contiguous with the last one, continuing its phase/targets.
+  // Auto-expand its editor so the phase/targets can be tweaked right away.
+  function addWeek() {
+    const last = weeks[weeks.length - 1];
+    const after = parseKey(weekRange(last).end);
+    after.setDate(after.getDate() + 1);
+    const wk = { id: "w" + Date.now(), startDate: keyFor(after), phase: phaseOf(last), targets: { ...last.targets } };
+    weeks = [...weeks, wk];
+    saveWeeks();
+    expandedId = wk.id;
+    render();
+  }
+  // Remove a week (its date-keyed logs & weights are left untouched). Always keep
+  // at least one week so the log page has something to show.
+  function deleteWeek(wk) {
+    if (weeks.length <= 1) { alert("Keep at least one week."); return; }
+    if (!confirm(`Delete Week ${weekIndex(wk.id) + 1}? Logs & weights for those days are kept.`)) return;
+    weeks = weeks.filter((w) => w.id !== wk.id);
+    if (activeWeekId === wk.id) activeWeekId = currentWeekId() || weeks[weeks.length - 1].id;
+    if (expandedId === wk.id) expandedId = null;
+    saveWeeks();
+    render();
+  }
+
+  // The three phase pills that recolor a week and pre-fill its targets.
+  function phasePills(wk) {
+    return el("div", { class: "phasePills" },
+      PHASE_ORDER.map((ph) => el("button", {
+        class: "phasePill " + PHASES[ph].cls + (phaseOf(wk) === ph ? " on" : ""),
+        onClick: (e) => {
+          e.stopPropagation();
+          wk.phase = ph;
+          wk.targets = phaseTargets(ph); // pre-fill suggested targets (still editable)
+          saveWeeks(); render();
+        },
+      }, PHASES[ph].label))
+    );
+  }
+
+  // Inline editor revealed under an expanded week row: phase, targets, start date.
+  function weekEditor(wk) {
+    const mk = (key) => {
+      const inp = el("input", { class: "ci", inputmode: "numeric", placeholder: key, value: String(wk.targets[key]) });
+      inp.addEventListener("change", () => { wk.targets = { ...wk.targets, [key]: +inp.value || 0 }; saveWeeks(); });
+      return inp;
+    };
+    const sd = el("input", { class: "ci", type: "date", value: wk.startDate });
+    sd.addEventListener("change", () => {
+      wk.startDate = sd.value || wk.startDate;
+      saveWeeks();
+      if (activeWeekId === wk.id) selected = todayOrFirst(weekDates(wk));
+      render();
+    });
+    return el("div", { class: "weekEditor" },
+      el("div", { class: "edLabel" }, "Phase"),
+      phasePills(wk),
+      el("div", { class: "edLabel" }, "Targets (cal · protein · carbs · fat)"),
+      el("div", { class: "crow" }, mk("cal"), mk("protein")),
+      el("div", { class: "crow" }, mk("carbs"), mk("fat")),
+      el("div", { class: "edLabel" }, "Start date"),
+      sd,
       el("div", { class: "crow" },
-        el("button", { class: "tool", onClick: () => { newCycle = null; render(); } }, "Cancel"),
-        el("button", { class: "addBtn", onClick: () => {
-          const weeks = Math.max(1, Math.round(+wks.value) || 1);
-          const cyNew = {
-            id: "c" + Date.now(),
-            name: name.value.trim() || `Cycle ${cycles.length + 1}`,
-            startDate: sd.value || newCycle.startDate,
-            weeks,
-            targets: { cal: +cc.value || 0, protein: +cp.value || 0, carbs: +ccb.value || 0, fat: +cf.value || 0 },
-          };
-          cycles = [...cycles, cyNew]; // seed Cycle 1 is already in the array
-          window.Store.setCycles(cycles);
-          activeCycleId = cyNew.id; activeWeek = 0;
-          selected = todayOrFirst(weekDays(cyNew, 0));
-          newCycle = null; view = "log"; render();
-        } }, "Create cycle")
+        el("button", { class: "tool", onClick: () => deleteWeek(wk) }, "Delete week"),
+        el("button", { class: "addBtn", onClick: () => openWeek(wk) }, "Open week →")
       )
     );
   }
 
-  function renderCycles() {
+  function renderWeeks() {
     const wrap = el("div", { class: "wrap" });
     wrap.appendChild(
       el("div", { class: "header" },
         el("div", null,
           el("div", { class: "eyebrow lime" }, "Diet plan"),
-          el("h1", null, "Cycles")
+          el("h1", null, "Weeks")
         ),
-        el("button", { class: "tool", onClick: () => { newCycle = null; view = "log"; render(); } }, "Done")
+        el("button", { class: "profBtn", title: "Profile", onClick: () => { view = "profile"; render(); } },
+          profInitial())
+      )
+    );
+    wrap.appendChild(el("button", { class: "addBtn", style: "margin-bottom:10px", onClick: addWeek }, "+ New week"));
+
+    const nowId = currentWeekId();
+    // Newest week on top.
+    weeks.slice().reverse().forEach((wk) => {
+      const idx = weekIndex(wk.id);
+      const r = weekRange(wk);
+      const isCurrent = wk.id === nowId;
+      const expanded = expandedId === wk.id;
+      const ph = PHASES[phaseOf(wk)];
+      const avg = weekAvg(weekDates(wk));
+      const container = el("div", { class: "weekItem" });
+      container.appendChild(
+        el("div", { class: "weekRow2 " + ph.cls + (isCurrent ? " current" : "") },
+          el("div", { class: "weekMeta", onClick: () => openWeek(wk) },
+            el("div", { class: "weekTitle" }, `Week ${idx + 1}`,
+              el("span", { class: "phaseTag " + ph.cls }, ph.label),
+              isCurrent ? el("span", { class: "curTag" }, "now") : ""),
+            el("div", { class: "sub" }, `${fmtRange(r)} · ${wk.targets.cal.toLocaleString()} cal`)
+          ),
+          el("div", { class: "weekRight" },
+            el("div", { class: "weekAvg" + (avg != null ? "" : " muted") },
+              avg != null ? fmtW(toDisplay(avg)) : "—", el("span", { class: "wcu" }, " " + unit)),
+            el("button", { class: "chevBtn", title: "Edit week",
+              onClick: (e) => { e.stopPropagation(); expandedId = expanded ? null : wk.id; render(); } },
+              expanded ? "▾" : "▸")
+          )
+        )
+      );
+      if (expanded) container.appendChild(weekEditor(wk));
+      wrap.appendChild(container);
+    });
+
+    return wrap;
+  }
+
+  // Letter shown inside the round profile button (signed-in email initial).
+  function profInitial() {
+    const user = window.Store.getUser();
+    const c = user && user.email ? user.email.trim()[0] : "";
+    return c ? c.toUpperCase() : "☻";
+  }
+
+  // ---- profile view: account + simple analysis over all logged data ----
+  // Effective macros for any day key (mirrors totals(), but for an arbitrary day).
+  function dayMacros(key) {
+    return (logs[key] || []).reduce((a, it) => {
+      const q = it.q || 1;
+      return { c: a.c + it.c * q, p: a.p + it.p * q, cb: a.cb + it.cb * q, f: a.f + it.f * q };
+    }, { c: 0, p: 0, cb: 0, f: 0 });
+  }
+
+  function statTile(value, unitStr, label) {
+    return el("div", { class: "statTile" },
+      el("div", { class: "statVal" }, value, unitStr ? el("span", { class: "statUnit" }, " " + unitStr) : ""),
+      el("div", { class: "statLab" }, label)
+    );
+  }
+
+  function renderProfile() {
+    const wrap = el("div", { class: "wrap" });
+    wrap.appendChild(
+      el("div", { class: "header" },
+        el("div", null,
+          el("div", { class: "eyebrow lime" }, "Account"),
+          el("h1", null, "Profile")
+        ),
+        el("button", { class: "iconBtn", title: "Back to weeks",
+          onClick: () => { view = "weeks"; render(); } }, "‹")
       )
     );
 
-    if (newCycle) {
-      wrap.appendChild(newCycleForm());
+    // account card
+    const user = window.Store.getUser();
+    const acct = el("div", { class: "card" });
+    if (user) {
+      acct.appendChild(el("div", { class: "eyebrow lime" }, "Signed in"));
+      acct.appendChild(el("div", { class: "profEmail" }, user.email));
+      acct.appendChild(el("div", { class: "sub" }, "Your meals & weight sync across every device."));
+      acct.appendChild(el("button", { class: "tool", style: "margin-top:14px",
+        onClick: () => { window.Store.signOut(); authMsg = ""; view = "weeks"; render(); } }, "Sign out"));
     } else {
-      wrap.appendChild(el("button", { class: "addBtn", onClick: () => {
-        const last = cycles[cycles.length - 1];
-        const after = parseKey(cycleRange(last).end);
-        after.setDate(after.getDate() + 1); // contiguous with the previous cycle
-        newCycle = { startDate: keyFor(after), weeks: last.weeks, targets: { ...last.targets } };
-        render();
-      } }, "+ New cycle"));
-    }
-
-    const nowId = currentCycleId();
-    // Newest cycle on top.
-    cycles.slice().reverse().forEach((cy) => {
-      const r = cycleRange(cy);
-      const isCurrent = cy.id === nowId;
-      const expanded = expandedId === cy.id;
-      wrap.appendChild(
-        el("div", { class: "cycleRow" + (isCurrent ? " current" : ""),
-          onClick: () => { expandedId = expanded ? null : cy.id; render(); } },
-          el("div", { class: "cycleMeta" },
-            el("div", { class: "cycleName" }, cy.name,
-              isCurrent ? el("span", { class: "curTag" }, "now") : ""),
-            el("div", { class: "sub" }, `${fmtRange(r)} · ${cy.weeks} wk · ${cy.targets.cal.toLocaleString()} cal`)
-          ),
-          el("div", { class: "chev" }, expanded ? "▾" : "▸")
-        )
-      );
-      if (!expanded) return;
-      for (let w = 0; w < cy.weeks; w++) {
-        const wd = weekDays(cy, w);
-        const wr = { start: keyFor(wd[0]), end: keyFor(wd[6]) };
-        wrap.appendChild(
-          el("div", { class: "weekRow", onClick: () => {
-            activeCycleId = cy.id; activeWeek = w;
-            selected = todayOrFirst(wd);
-            view = "log"; render();
-          } },
-            el("span", { class: "weekName" }, `Week ${w + 1}`),
-            el("span", { class: "sub" }, fmtRange(wr))
-          )
-        );
+      acct.appendChild(el("div", { class: "eyebrow lime" }, "This device only"));
+      acct.appendChild(el("div", { class: "sub" }, "Not signed in — data stays on this device."));
+      if (window.Store.isSyncConfigured()) {
+        const btn = el("button", { class: "addBtn", style: "margin-top:12px", onClick: async () => {
+          authMsg = "Opening Google sign-in…"; render();
+          try { await window.Store.signInWithGoogle(); authMsg = ""; render(); }
+          catch (e) { authMsg = authError(e && (e.code || e.message)); render(); }
+        } }, window.Store.isSyncReady() ? "Sign in with Google" : "Loading sign-in…");
+        if (!window.Store.isSyncReady()) btn.setAttribute("disabled", "true");
+        acct.appendChild(btn);
+        if (authMsg) acct.appendChild(el("div", { class: "sub", style: "margin-top:8px" }, authMsg));
       }
-    });
+    }
+    wrap.appendChild(acct);
+
+    // ---- nutrition analysis (over every logged day) ----
+    const loggedDays = Object.keys(logs).filter((k) => (logs[k] || []).length > 0);
+    const sum = loggedDays.reduce((a, k) => {
+      const m = dayMacros(k);
+      return { c: a.c + m.c, p: a.p + m.p, cb: a.cb + m.cb, f: a.f + m.f };
+    }, { c: 0, p: 0, cb: 0, f: 0 });
+    const n = loggedDays.length;
+    const avg = (x) => (n ? Math.round(x / n) : 0);
+
+    const nutri = el("div", { class: "card" }, el("div", { class: "eyebrow lime" }, "Nutrition"));
+    if (n) {
+      nutri.appendChild(el("div", { class: "statGrid" },
+        statTile(n.toLocaleString(), "", "Days logged"),
+        statTile(avg(sum.c).toLocaleString(), "cal", "Avg / day"),
+        statTile(avg(sum.p).toLocaleString(), "g", "Avg protein"),
+        statTile(avg(sum.cb).toLocaleString(), "g", "Avg carbs"),
+        statTile(avg(sum.f).toLocaleString(), "g", "Avg fat"),
+        statTile(Math.round(sum.c).toLocaleString(), "cal", "Total logged")
+      ));
+    } else {
+      nutri.appendChild(el("div", { class: "empty" }, "No meals logged yet."));
+    }
+    wrap.appendChild(nutri);
+
+    // ---- weight analysis ----
+    const wKeys = Object.keys(weights)
+      .filter((k) => typeof weights[k] === "number" && weights[k] > 0)
+      .sort();
+    const weight = el("div", { class: "card" }, el("div", { class: "eyebrow lime" }, "Weight"));
+    if (wKeys.length) {
+      const first = weights[wKeys[0]], last = weights[wKeys[wKeys.length - 1]];
+      const delta = toDisplay(last) - toDisplay(first);
+      const sign = delta > 0 ? "+" : "";
+      weight.appendChild(el("div", { class: "statGrid" },
+        statTile(fmtW(toDisplay(first)), unit, "Start"),
+        statTile(fmtW(toDisplay(last)), unit, "Latest"),
+        statTile(sign + fmtW(delta), unit, "Change"),
+        statTile(wKeys.length.toLocaleString(), "", "Weigh-ins")
+      ));
+      // Per-week average trend (only weeks that have at least one weigh-in).
+      const trend = weeks
+        .map((wk) => ({ wk, a: weekAvg(weekDates(wk)) }))
+        .filter((x) => x.a != null);
+      if (trend.length) {
+        weight.appendChild(el("div", { class: "edLabel", style: "margin-top:14px" }, "Weekly average"));
+        trend.forEach(({ wk, a }) => {
+          weight.appendChild(el("div", { class: "trendRow" },
+            el("span", { class: "sub" }, `Week ${weekIndex(wk.id) + 1}`),
+            el("span", { class: "trendVal" }, fmtW(toDisplay(a)), el("span", { class: "wcu" }, " " + unit))
+          ));
+        });
+      }
+    } else {
+      weight.appendChild(el("div", { class: "empty" }, "No weigh-ins yet."));
+    }
+    wrap.appendChild(weight);
+
     return wrap;
   }
 
@@ -558,11 +744,13 @@
       root.appendChild(renderLogin());
       return;
     }
-    if (view === "cycles") { root.appendChild(renderCycles()); return; }
+    if (view === "weeks") { root.appendChild(renderWeeks()); return; }
+    if (view === "profile") { root.appendChild(renderProfile()); return; }
 
-    const cy = activeCycle();
-    const week = curWeek();
-    const T = cy.targets; // active cycle's macro targets drive the whole log page
+    const wk = activeWeek();
+    const idx = weekIndex(wk.id);
+    const ph = PHASES[phaseOf(wk)];
+    const T = wk.targets; // active week's macro targets drive the whole log page
     const tt = totals();
 
     const wrap = el("div", { class: "wrap" });
@@ -571,33 +759,35 @@
     wrap.appendChild(
       el("div", { class: "header" },
         el("div", null,
-          el("button", { class: "backbtn", onClick: () => { view = "cycles"; expandedId = cy.id; render(); } }, "‹ Cycles"),
-          el("h1", null, cy.name),
+          el("button", { class: "backbtn", onClick: () => { view = "weeks"; expandedId = null; render(); } }, "‹ Weeks"),
+          el("h1", null, `Week ${idx + 1}`,
+            el("span", { class: "phaseTag " + ph.cls, style: "margin-left:10px;vertical-align:middle" }, ph.label)),
           el("div", { class: "sub" }, `Target ${T.cal.toLocaleString()} cal · ${T.protein}g protein floor`)
         ),
         el("div", { id: "saveBadge", class: "badge" })
       )
     );
 
-    // week navigation within the cycle
-    const goWeek = (w) => {
-      activeWeek = Math.min(Math.max(0, w), cy.weeks - 1);
-      selected = todayOrFirst(weekDays(cy, activeWeek));
+    // navigation between weeks in the plan
+    const goTo = (i) => {
+      const w = weeks[Math.min(Math.max(0, i), weeks.length - 1)];
+      activeWeekId = w.id;
+      selected = todayOrFirst(weekDates(w));
       render();
     };
-    const prevBtn = el("button", { class: "wkarrow", onClick: () => goWeek(week - 1) }, "‹");
-    if (week === 0) prevBtn.setAttribute("disabled", "true");
-    const nextBtn = el("button", { class: "wkarrow", onClick: () => goWeek(week + 1) }, "›");
-    if (week === cy.weeks - 1) nextBtn.setAttribute("disabled", "true");
+    const prevBtn = el("button", { class: "wkarrow", onClick: () => goTo(idx - 1) }, "‹");
+    if (idx === 0) prevBtn.setAttribute("disabled", "true");
+    const nextBtn = el("button", { class: "wkarrow", onClick: () => goTo(idx + 1) }, "›");
+    if (idx === weeks.length - 1) nextBtn.setAttribute("disabled", "true");
     wrap.appendChild(el("div", { class: "wknav" },
       prevBtn,
-      el("div", { class: "wklabel" }, `Week ${week + 1} of ${cy.weeks}`),
+      el("div", { class: "wklabel" }, `Week ${idx + 1} of ${weeks.length}`),
       nextBtn
     ));
 
     // day strip
     const strip = el("div", { class: "strip" });
-    weekDays(cy, week).forEach((d) => {
+    weekDates(wk).forEach((d) => {
       const k = keyFor(d);
       const active = k === selected;
       const logged = (logs[k] || []).length > 0;
@@ -754,39 +944,12 @@
       );
     }
 
-    // weight trend — first week vs last week of the active cycle
-    const w1 = weekAvg(weekDays(cy, 0));
-    const w2 = cy.weeks > 1 ? weekAvg(weekDays(cy, cy.weeks - 1)) : null;
-    const wcols = el("div", { class: "wcols" },
-      el("div", { class: "wcol" }, el("div", { class: "wctitle" }, cy.weeks > 1 ? "First week avg" : "Week avg"),
-        el("div", { class: "wcval" + (w1 != null ? "" : " muted") }, w1 != null ? fmtW(toDisplay(w1)) : "—", el("span", { class: "wcu" }, " " + unit)))
-    );
-    if (cy.weeks > 1) {
-      wcols.appendChild(el("div", { class: "wcol" }, el("div", { class: "wctitle" }, "Last week avg"),
-        el("div", { class: "wcval" + (w2 != null ? "" : " muted") }, w2 != null ? fmtW(toDisplay(w2)) : "—", el("span", { class: "wcu" }, " " + unit))));
-    }
-    const trend = el("div", { class: "card trend" }, el("div", { class: "eyebrow lime" }, "Weight trend"), wcols);
-    if (cy.weeks > 1 && w1 != null && w2 != null) {
-      const diffKg = w2 - w1; // advice thresholds are defined in kg
-      const diff = fmtW(toDisplay(w2) - toDisplay(w1));
-      const advice = diffKg > P.weightGoal.maxGainKg ? "trim 200 cal"
-        : diffKg < (P.weightGoal.minGainKg - 0.35) ? "add 200 cal" : "perfect — hold steady";
-      trend.appendChild(el("div", { class: "diff" },
-        "Change: ", el("span", { class: "lime b" }, `${diffKg > 0 ? "+" : ""}${diff} ${unit}`), ` · ${advice}`));
-    }
-    trend.appendChild(el("div", { class: "note" }, P.weightGoal.note));
-    wrap.appendChild(trend);
-
     // data tools
     const tools = el("div", { class: "tools" },
       el("button", { class: "tool", onClick: exportData }, "Export backup"),
       el("button", { class: "tool", onClick: importData }, "Import backup")
     );
     wrap.appendChild(tools);
-
-    // cloud sync (sign-in / status) — only when Firebase config is present
-    const sp = syncPanel();
-    if (sp) wrap.appendChild(sp);
 
     root.appendChild(wrap);
   }
@@ -808,29 +971,6 @@
     if (/unauthorized-domain/.test(msg)) return "This site isn't an authorized domain in Firebase Auth settings.";
     if (/network/.test(msg)) return "Network error — check your connection.";
     return msg || "Something went wrong.";
-  }
-
-  // Cloud-sync panel: Google sign-in button, or signed-in status + sign out.
-  function syncPanel() {
-    if (!window.Store.isSyncConfigured()) return null;
-    const panel = el("div", { class: "card trend" }, el("div", { class: "eyebrow lime" }, "Cloud sync"));
-    const user = window.Store.getUser();
-    if (user) {
-      panel.appendChild(el("div", { class: "sub" }, `Signed in as ${user.email} — synced across devices.`));
-      panel.appendChild(el("button", { class: "tool", style: "margin-top:10px",
-        onClick: () => { window.Store.signOut(); authMsg = ""; render(); } }, "Sign out"));
-      return panel;
-    }
-    panel.appendChild(el("div", { class: "sub" }, "Sign in with Google to sync this device with your others."));
-    const btn = el("button", { class: "addBtn", style: "margin-top:12px", onClick: async () => {
-      authMsg = "Opening Google sign-in…"; render();
-      try { await window.Store.signInWithGoogle(); authMsg = ""; render(); } // onChange handler syncs + re-renders
-      catch (e) { authMsg = authError(e && (e.code || e.message)); render(); }
-    } }, "Sign in with Google");
-    if (!window.Store.isSyncReady()) { btn.setAttribute("disabled", "true"); authMsg = authMsg || "Loading sign-in…"; }
-    panel.appendChild(btn);
-    if (authMsg) panel.appendChild(el("div", { class: "sub", style: "margin-top:8px" }, authMsg));
-    return panel;
   }
 
   function exportData() {

@@ -12,7 +12,8 @@ window.Store = (function () {
   const WEIGHTS_KEY = "mealtracker.weights.v1"; // { "YYYY-MM-DD": number }
   const FOODS_KEY = "mealtracker.foods.v1";   // { "<slot>": [ {n,c,p,cb,f}, ... ] } — user's quick-add arrangement
   const UNIT_KEY = "mealtracker.unit.v1";     // "kg" | "lb" — weight display unit (weights are always stored in kg)
-  const CYCLES_KEY = "mealtracker.cycles.v1"; // [ { id, name, startDate, weeks, targets:{cal,protein,carbs,fat} }, ... ] — diet cycles, oldest first
+  const CYCLES_KEY = "mealtracker.cycles.v1"; // [ { id, name, startDate, weeks, targets:{cal,protein,carbs,fat} }, ... ] — legacy diet cycles (read only, migrated into weeks)
+  const WEEKS_KEY = "mealtracker.weeks.v1";   // [ { id, startDate, phase, targets:{cal,protein,carbs,fat} }, ... ] — diet weeks, oldest first; each spans 7 days
   // Note: the Firebase SDK persists its own auth session; no local key needed.
 
   function read(key) {
@@ -69,6 +70,7 @@ window.Store = (function () {
       weights: read(WEIGHTS_KEY),
       foods: (function () { const r = localStorage.getItem(FOODS_KEY); return r ? JSON.parse(r) : null; })(),
       cycles: (function () { const r = localStorage.getItem(CYCLES_KEY); return r ? JSON.parse(r) : null; })(),
+      weeks: (function () { const r = localStorage.getItem(WEEKS_KEY); return r ? JSON.parse(r) : null; })(),
       unit: localStorage.getItem(UNIT_KEY) || "kg",
       updatedAt: Date.now(),
     };
@@ -79,6 +81,7 @@ window.Store = (function () {
     if (d.weights) write(WEIGHTS_KEY, d.weights);
     if (d.foods) write(FOODS_KEY, d.foods);
     if (d.cycles) write(CYCLES_KEY, d.cycles);
+    if (d.weeks) write(WEEKS_KEY, d.weeks);
     if (d.unit) localStorage.setItem(UNIT_KEY, d.unit);
     return true;
   }
@@ -104,7 +107,7 @@ window.Store = (function () {
   async function syncInit() {
     if (!currentUser() || !syncCfg()) return;
     const remote = await cloudPull();
-    if (remote && (remote.logs || remote.weights || remote.foods || remote.cycles)) applySnapshot(remote);
+    if (remote && (remote.logs || remote.weights || remote.foods || remote.cycles || remote.weeks)) applySnapshot(remote);
     else cloudPush();
     if (syncCb) syncCb();
   }
@@ -131,6 +134,14 @@ window.Store = (function () {
     },
     setCycles: (arr) => { const ok = write(CYCLES_KEY, arr); schedulePush(); return ok; },
 
+    // Diet weeks. Returns null until the user has weeks persisted, so app.js can
+    // migrate legacy cycles or seed from PLAN on first run.
+    getWeeks: () => {
+      const raw = localStorage.getItem(WEEKS_KEY);
+      return raw ? JSON.parse(raw) : null;
+    },
+    setWeeks: (arr) => { const ok = write(WEEKS_KEY, arr); schedulePush(); return ok; },
+
     // Cloud sync: Firebase Google auth + per-user data.
     isSyncConfigured: () => !!syncCfg(),
     isSyncReady: () => !!fb(),       // Firebase SDK loaded?
@@ -151,7 +162,7 @@ window.Store = (function () {
     // Export everything as a JSON string (for backup / transfer)
     exportAll: () =>
       JSON.stringify(
-        { logs: read(LOGS_KEY), weights: read(WEIGHTS_KEY), foods: read(FOODS_KEY), cycles: read(CYCLES_KEY), unit: localStorage.getItem(UNIT_KEY) },
+        { logs: read(LOGS_KEY), weights: read(WEIGHTS_KEY), foods: read(FOODS_KEY), cycles: read(CYCLES_KEY), weeks: read(WEEKS_KEY), unit: localStorage.getItem(UNIT_KEY) },
         null,
         2
       ),
@@ -164,6 +175,7 @@ window.Store = (function () {
         if (data.weights) write(WEIGHTS_KEY, data.weights);
         if (data.foods) write(FOODS_KEY, data.foods);
         if (data.cycles) write(CYCLES_KEY, data.cycles);
+        if (data.weeks) write(WEEKS_KEY, data.weeks);
         if (data.unit) localStorage.setItem(UNIT_KEY, data.unit);
         schedulePush();
         return true;
@@ -177,6 +189,7 @@ window.Store = (function () {
       localStorage.removeItem(WEIGHTS_KEY);
       localStorage.removeItem(FOODS_KEY);
       localStorage.removeItem(CYCLES_KEY);
+      localStorage.removeItem(WEEKS_KEY);
       localStorage.removeItem(UNIT_KEY);
       signOut();
     },
