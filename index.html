@@ -51,6 +51,13 @@
     .trendRow { display:flex; justify-content:space-between; align-items:baseline;
       padding:9px 0; border-top:1px solid var(--line); }
     .trendVal { font-size:16px; font-weight:800; }
+    .wchartBox { background:#11160d; border:1px solid var(--line); border-radius:13px; padding:10px 8px; }
+    .wchart { display:block; width:100%; height:auto; overflow:visible; }
+    .wcaxis { fill:var(--mute); font-size:9px; font-weight:600; }
+    .collapseHdr { display:flex; align-items:center; justify-content:space-between; width:100%;
+      background:none; border:none; padding:6px 0; cursor:pointer; }
+    .collapseChev { color:var(--mute); font-size:13px; line-height:1; }
+    .collapseHdr:active .collapseChev { color:var(--lime); }
 
     .strip { display:flex; gap:7px; overflow-x:auto; padding-bottom:8px; margin-bottom:16px; }
     .strip::-webkit-scrollbar { height:0; }

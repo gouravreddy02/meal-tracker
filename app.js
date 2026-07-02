@@ -110,6 +110,7 @@
   let view = "weeks";     // "log" | "weeks" — land on the diet week plan after login
   let activeWeekId;       // which week the log page is showing
   let expandedId = null;  // week expanded in the Weeks list (inline editor)
+  let showWeekAvg = false; // profile: weekly-average list collapsed by default
   let swipedWeekId = null; // week row slid open revealing its Delete action
   // Land on the week containing today, else the most recent week.
   (function initActive() {
@@ -691,6 +692,38 @@
     );
   }
 
+  // A small inline SVG line chart of every weigh-in over time, plotted by date
+  // (so gaps between weigh-ins show as gaps) and in the current display unit.
+  // `keys` are sorted, filtered date keys that all have a positive weight.
+  function weightChart(keys) {
+    const W = 320, H = 150, padL = 30, padR = 12, padT = 12, padB = 22;
+    const pts = keys.map((k) => ({ t: parseKey(k).getTime(), v: toDisplay(weights[k]) }));
+    const t0 = pts[0].t, t1 = pts[pts.length - 1].t, spanT = t1 - t0 || 1;
+    const dataLo = Math.min(...pts.map((p) => p.v)), dataHi = Math.max(...pts.map((p) => p.v));
+    let lo = dataLo, hi = dataHi;
+    if (hi === lo) { hi += 1; lo -= 1; }           // flat data: give the axis room
+    const padV = (hi - lo) * 0.15; lo -= padV; hi += padV;
+    const x = (t) => padL + ((t - t0) / spanT) * (W - padL - padR);
+    const y = (v) => padT + (1 - (v - lo) / (hi - lo)) * (H - padT - padB);
+    const line = pts.map((p) => `${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`).join(" ");
+    const area = `${x(t0).toFixed(1)},${(H - padB).toFixed(1)} ${line} ${x(t1).toFixed(1)},${(H - padB).toFixed(1)}`;
+    const dots = pts.map((p) => `<circle cx="${x(p.t).toFixed(1)}" cy="${y(p.v).toFixed(1)}" r="2.6" fill="var(--lime)"/>`).join("");
+    const axisDate = (t) => new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    const svg =
+      `<svg viewBox="0 0 ${W} ${H}" class="wchart" role="img" aria-label="Weight over time">` +
+        `<polyline points="${area}" fill="rgba(197,240,74,.10)" stroke="none"/>` +
+        `<polyline points="${line}" fill="none" stroke="var(--lime)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>` +
+        dots +
+        `<text x="0" y="${(y(dataHi) + 3).toFixed(1)}" class="wcaxis">${fmtW(dataHi)}</text>` +
+        `<text x="0" y="${(y(dataLo) + 3).toFixed(1)}" class="wcaxis">${fmtW(dataLo)}</text>` +
+        `<text x="${padL}" y="${H - 6}" class="wcaxis">${axisDate(t0)}</text>` +
+        (t1 > t0 ? `<text x="${W - padR}" y="${H - 6}" text-anchor="end" class="wcaxis">${axisDate(t1)}</text>` : "") +
+      `</svg>`;
+    const box = el("div", { class: "wchartBox" });
+    box.innerHTML = svg;
+    return box;
+  }
+
   function renderProfile() {
     const wrap = el("div", { class: "wrap" });
     wrap.appendChild(
@@ -745,8 +778,7 @@
         statTile(avg(sum.c).toLocaleString(), "cal", "Avg / day"),
         statTile(avg(sum.p).toLocaleString(), "g", "Avg protein"),
         statTile(avg(sum.cb).toLocaleString(), "g", "Avg carbs"),
-        statTile(avg(sum.f).toLocaleString(), "g", "Avg fat"),
-        statTile(Math.round(sum.c).toLocaleString(), "cal", "Total logged")
+        statTile(avg(sum.f).toLocaleString(), "g", "Avg fat")
       ));
     } else {
       nutri.appendChild(el("div", { class: "empty" }, "No meals logged yet."));
@@ -768,18 +800,29 @@
         statTile(sign + fmtW(delta), unit, "Change"),
         statTile(wKeys.length.toLocaleString(), "", "Weigh-ins")
       ));
+      // Line chart of every weigh-in over time (needs at least two points).
+      if (wKeys.length >= 2) {
+        weight.appendChild(el("div", { class: "edLabel", style: "margin-top:16px" }, "Trend"));
+        weight.appendChild(weightChart(wKeys));
+      }
       // Per-week average trend (only weeks that have at least one weigh-in).
       const trend = weeks
         .map((wk) => ({ wk, a: weekAvg(weekDates(wk)) }))
         .filter((x) => x.a != null);
       if (trend.length) {
-        weight.appendChild(el("div", { class: "edLabel", style: "margin-top:14px" }, "Weekly average"));
-        trend.forEach(({ wk, a }) => {
-          weight.appendChild(el("div", { class: "trendRow" },
-            el("span", { class: "sub" }, `Week ${weekIndex(wk.id) + 1}`),
-            el("span", { class: "trendVal" }, fmtW(toDisplay(a)), el("span", { class: "wcu" }, " " + unit))
-          ));
-        });
+        weight.appendChild(el("button", { class: "collapseHdr", style: "margin-top:14px",
+          onClick: () => { showWeekAvg = !showWeekAvg; render(); } },
+          el("span", { class: "edLabel", style: "margin:0" }, "Weekly average"),
+          el("span", { class: "collapseChev" }, showWeekAvg ? "▾" : "▸")
+        ));
+        if (showWeekAvg) {
+          trend.forEach(({ wk, a }) => {
+            weight.appendChild(el("div", { class: "trendRow" },
+              el("span", { class: "sub" }, `Week ${weekIndex(wk.id) + 1}`),
+              el("span", { class: "trendVal" }, fmtW(toDisplay(a)), el("span", { class: "wcu" }, " " + unit))
+            ));
+          });
+        }
       }
     } else {
       weight.appendChild(el("div", { class: "empty" }, "No weigh-ins yet."));
