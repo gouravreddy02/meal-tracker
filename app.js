@@ -110,6 +110,7 @@
   let view = "weeks";     // "log" | "weeks" — land on the diet week plan after login
   let activeWeekId;       // which week the log page is showing
   let expandedId = null;  // week expanded in the Weeks list (inline editor)
+  let swipedWeekId = null; // week row slid open revealing its Delete action
   // Land on the week containing today, else the most recent week.
   (function initActive() {
     activeWeekId = currentWeekId() || weeks[weeks.length - 1].id;
@@ -352,7 +353,7 @@
   // grids). A ctx describes the DOM shape + how to commit a move:
   //   { bodySel, itemSel, grid, onBegin?, commit }
   // Works with touch and mouse via pointer events; no libraries.
-  const foodDragCtx = { bodySel: ".presets", itemSel: ".preset", grid: true,
+  const foodDragCtx = { bodySel: ".presets", itemSel: ".preset", grid: false,
     onBegin: null, commit: moveFood };
 
   function makeDraggable(card, slot, idx, ctx) {
@@ -591,28 +592,80 @@
       const ph = PHASES[phaseOf(wk)];
       const avg = weekAvg(weekDates(wk));
       const container = el("div", { class: "weekItem" });
-      container.appendChild(
-        el("div", { class: "weekRow2 " + ph.cls + (isCurrent ? " current" : "") },
-          el("div", { class: "weekMeta", onClick: () => openWeek(wk) },
-            el("div", { class: "weekTitle" }, `Week ${idx + 1}`,
-              el("span", { class: "phaseTag " + ph.cls }, ph.label),
-              isCurrent ? el("span", { class: "curTag" }, "now") : ""),
-            el("div", { class: "sub" }, `${fmtRange(r)} · ${wk.targets.cal.toLocaleString()} cal`)
-          ),
-          el("div", { class: "weekRight" },
-            el("div", { class: "weekAvg" + (avg != null ? "" : " muted") },
-              avg != null ? fmtW(toDisplay(avg)) : "—", el("span", { class: "wcu" }, " " + unit)),
-            el("button", { class: "chevBtn", title: "Edit week",
-              onClick: (e) => { e.stopPropagation(); expandedId = expanded ? null : wk.id; render(); } },
-              expanded ? "▾" : "▸")
-          )
+      // Swipe a row left to reveal Edit & Remove actions behind it.
+      const editLayer = el("button", { class: "swipeBtn swipeEdit", title: "Edit week",
+        onClick: (e) => { e.stopPropagation(); swipedWeekId = null; expandedId = wk.id; render(); } }, "Edit");
+      const delLayer = el("button", { class: "swipeBtn swipeDel", title: "Remove week",
+        onClick: (e) => { e.stopPropagation(); swipedWeekId = null; deleteWeek(wk); render(); } }, "Remove");
+      const row = el("div", { class: "weekRow2 " + ph.cls + (isCurrent ? " current" : "") },
+        el("div", { class: "weekMeta",
+          onClick: () => { if (swipedWeekId === wk.id) { swipedWeekId = null; render(); } else openWeek(wk); } },
+          el("div", { class: "weekTitle" }, `Week ${idx + 1}`,
+            el("span", { class: "phaseTag " + ph.cls }, ph.label),
+            isCurrent ? el("span", { class: "curTag" }, "now") : ""),
+          el("div", { class: "sub" }, `${fmtRange(r)} · ${wk.targets.cal.toLocaleString()} cal`)
+        ),
+        el("div", { class: "weekRight" },
+          el("div", { class: "weekAvg" + (avg != null ? "" : " muted") },
+            avg != null ? fmtW(toDisplay(avg)) : "—", el("span", { class: "wcu" }, " " + unit)),
+          el("button", { class: "chevBtn", title: "Edit week",
+            onClick: (e) => { e.stopPropagation(); expandedId = expanded ? null : wk.id; render(); } },
+            expanded ? "▾" : "▸")
         )
       );
+      makeWeekSwipe(row, wk);
+      container.appendChild(el("div", { class: "swipeWrap" },
+        el("div", { class: "swipeAct" }, editLayer, delLayer), row));
       if (expanded) container.appendChild(weekEditor(wk));
       wrap.appendChild(container);
     });
 
     return wrap;
+  }
+
+  // Slide a week row left to reveal its Edit & Remove buttons; release past a
+  // threshold to leave it open, otherwise it snaps back. Vertical drags scroll.
+  function makeWeekSwipe(row, wk) {
+    const OPEN = -168, THRESH = 84;
+    let startX = 0, startY = 0, t = 0, active = false, decided = false;
+    row.style.transition = "transform .18s ease";
+    row.style.transform = swipedWeekId === wk.id ? `translateX(${OPEN}px)` : "translateX(0)";
+    row.addEventListener("pointerdown", (e) => {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      startX = e.clientX; startY = e.clientY;
+      t = swipedWeekId === wk.id ? OPEN : 0;
+      active = true; decided = false;
+      row.style.transition = "none";
+    });
+    row.addEventListener("pointermove", (e) => {
+      if (!active) return;
+      const mx = e.clientX - startX, my = e.clientY - startY;
+      if (!decided) {
+        if (Math.abs(mx) < 6 && Math.abs(my) < 6) return;
+        if (Math.abs(my) > Math.abs(mx)) { active = false; return; } // vertical → let it scroll
+        decided = true;
+        row.setPointerCapture(e.pointerId);
+      }
+      const base = swipedWeekId === wk.id ? OPEN : 0;
+      t = Math.max(OPEN, Math.min(0, base + mx));
+      row.style.transform = `translateX(${t}px)`;
+      e.preventDefault();
+    });
+    const end = () => {
+      if (!active) return;
+      active = false;
+      row.style.transition = "transform .18s ease";
+      const stayOpen = t < -THRESH;
+      swipedWeekId = stayOpen ? wk.id : (swipedWeekId === wk.id ? null : swipedWeekId);
+      row.style.transform = `translateX(${stayOpen ? OPEN : 0}px)`;
+      if (decided) { // swallow the click that fires after a real swipe
+        const swallow = (ev) => { ev.stopPropagation(); ev.preventDefault(); };
+        window.addEventListener("click", swallow, { capture: true, once: true });
+        setTimeout(() => window.removeEventListener("click", swallow, { capture: true }), 0);
+      }
+    };
+    row.addEventListener("pointerup", end);
+    row.addEventListener("pointercancel", end);
   }
 
   // Letter shown inside the round profile button (signed-in email initial).
@@ -870,12 +923,18 @@
             qtyEl = el("div", { class: "qty",
               onClick: (e) => { e.stopPropagation(); editQty = { slot, i }; render(); } }, fmtQ(amountOf(slot, p)));
           }
+          const q = qtyOf(slot, p);
           const btn = el("div", { class: "preset draggable" + (logged ? " logged" : ""),
             onClick: () => toggleFood(slot, p) },
             qtyEl,
             el("div", { class: "pbody" },
               el("span", { class: "pn" }, p.n),
-              el("span", { class: "pc" }, String(Math.round(p.c * qtyOf(slot, p))))
+              el("span", { class: "pmacros" },
+                el("span", { class: "pcal" }, Math.round(p.c * q) + " cal"),
+                el("span", { class: "pmac" }, "P " + Math.round(p.p * q)),
+                el("span", { class: "pmac" }, "C " + Math.round(p.cb * q)),
+                el("span", { class: "pmac" }, "F " + Math.round(p.f * q))
+              )
             )
           );
           makeDraggable(btn, slot, i, foodDragCtx);
