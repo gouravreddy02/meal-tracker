@@ -20,6 +20,18 @@
   //    meal in `s`. A catalog food is planned into one of these meals.
   const CATEGORIES = Object.keys(P.foods);
   const MEALS = ["Before workout", "After workout", "Lunch", "Snacks", "Dinner"];
+  // Measurement units a food's macros can be quoted per (value stored on the food
+  // as `u`; label shown in the New food picker). "serving" ≈ the old unit-less food.
+  const UNITS = [
+    { v: "g", l: "grams (g)" },
+    { v: "tbsp", l: "tablespoon (tbsp)" },
+    { v: "tsp", l: "teaspoon (tsp)" },
+    { v: "ml", l: "milliliter (ml)" },
+    { v: "cup", l: "cup" },
+    { v: "oz", l: "ounce (oz)" },
+    { v: "piece", l: "piece" },
+    { v: "serving", l: "serving" },
+  ];
   // Which meal a journal item belongs to (legacy/unknown slots fall under Snacks).
   const mealOf = (it) => (MEALS.indexOf(it.s) >= 0 ? it.s : "Snacks");
   // A journal item counts toward totals only once eaten. Legacy items (saved
@@ -204,6 +216,7 @@
   // Quantity display: drop a trailing ".0" so whole numbers stay clean.
   const fmtQ = (n) => (Number.isInteger(n) ? String(n) : String(Math.round(n * 100) / 100));
   let lastSlot = CATEGORIES[0]; // category a freshly-created food lands in
+  let lastUnit = "g"; // measurement unit last chosen in the New food form
   let authMsg = "";      // transient cloud-sync status/error message
   let authReady = false; // has the Firebase SDK reported initial auth state yet?
   let localOnly = false; // user chose to skip login and use this device only
@@ -278,8 +291,10 @@
   // in (q × b): servings for plan foods, or grams for custom foods whose macros
   // were entered per N units. `s` is the meal it sits in.
   function snapItem(meal, p, q) {
-    return { n: p.n, c: p.c, p: p.p, cb: p.cb, f: p.f, fi: p.fi || 0, s: meal, q, b: p.b || 1 };
+    return { n: p.n, c: p.c, p: p.p, cb: p.cb, f: p.f, fi: p.fi || 0, s: meal, q, b: p.b || 1, u: p.u || "" };
   }
+  // Amount label for the red box: the amount (q × b) with its unit, e.g. "200 g".
+  const amountLabel = (amt, u) => fmtQ(amt) + (u ? " " + u : "");
   // Plan a catalog food into a meal for the selected day. It lands greyed out
   // (eaten:false) and doesn't count toward totals until it's tapped to "eaten".
   function planFood(meal, p) {
@@ -1021,7 +1036,7 @@
             qtyEl = inp;
           } else {
             qtyEl = el("div", { class: "qty",
-              onClick: (e) => { e.stopPropagation(); editQty = idx; render(); } }, fmtQ(q * base));
+              onClick: (e) => { e.stopPropagation(); editQty = idx; render(); } }, amountLabel(q * base, it.u));
           }
           grid.appendChild(
             el("div", { class: "preset " + (eaten ? "eaten macro-" + macroOf(it) : "planned"),
@@ -1060,7 +1075,8 @@
           const chip = el("div", { class: "preset draggable catalog macro-" + macroOf(p),
             onClick: () => { mealPickFor = open ? null : { cat, i }; render(); } },
             el("div", { class: "pbody" },
-              el("span", { class: "pn" }, p.n),
+              el("span", { class: "pn" }, p.n,
+                p.u ? el("span", { class: "pserv" }, " · " + amountLabel(q * (p.b || 1), p.u)) : ""),
               el("span", { class: "pmacros" },
                 el("span", { class: "pcal" }, Math.round(p.c * q) + " cal"),
                 el("span", { class: "pmac" }, "P " + Math.round(p.p * q)),
@@ -1091,13 +1107,23 @@
       // New-food form: creates a catalog entry (name + macros + category). Unlike
       // before, this only adds to the catalog — it isn't auto-logged to the day.
       const cn = el("input", { class: "ci", placeholder: "Food name" });
-      const cbase = el("input", { class: "ci", inputmode: "decimal", placeholder: "macros are per… (e.g. 50)" });
+      const cbase = el("input", { class: "ci", inputmode: "decimal", placeholder: "quantity (e.g. 100)" });
+      const cdef = el("input", { class: "ci", inputmode: "decimal", placeholder: `default to log in ${lastUnit} (e.g. 200)` });
+      // Unit the macros are quoted per; changing it updates the default-amount hint.
+      const cu = el("select", { class: "ci", onChange: (e) => {
+        lastUnit = e.target.value;
+        cdef.setAttribute("placeholder", `default to log in ${lastUnit} (e.g. 200)`);
+      } });
+      UNITS.forEach((u) => {
+        const opt = el("option", { value: u.v }, u.l);
+        if (u.v === lastUnit) opt.selected = true;
+        cu.appendChild(opt);
+      });
       const cc = el("input", { class: "ci", inputmode: "decimal", placeholder: "cal" });
       const cp = el("input", { class: "ci", inputmode: "decimal", placeholder: "protein" });
       const ccb = el("input", { class: "ci", inputmode: "decimal", placeholder: "carbs" });
       const cf = el("input", { class: "ci", inputmode: "decimal", placeholder: "fat" });
       const cfi = el("input", { class: "ci", inputmode: "decimal", placeholder: "fiber" });
-      const cdef = el("input", { class: "ci", inputmode: "decimal", placeholder: "default amount (e.g. 200)" });
       const cs = el("select", { class: "ci", onChange: (e) => { lastSlot = e.target.value; } });
       CATEGORIES.forEach((s) => {
         const opt = el("option", { value: s }, s);
@@ -1108,27 +1134,30 @@
       wrap.appendChild(
         el("div", { class: "customBox" },
           cn,
-          cbase,
+          el("div", { class: "edLabel", style: "margin-top:4px" }, "Macros are per"),
+          el("div", { class: "crow" }, cbase, cu),
           el("div", { class: "crow" }, cc, cp),
           el("div", { class: "crow" }, ccb, cf),
           cfi,
+          el("div", { class: "edLabel" }, "Default amount to log"),
           cdef,
-          el("div", { class: "edLabel", style: "margin-top:4px" }, "Category"),
+          el("div", { class: "edLabel" }, "Category"),
           cs,
           el("div", { class: "crow" },
             el("button", { class: "tool", onClick: () => { tab = "catalog"; render(); } }, "Cancel"),
             el("button", { class: "addBtn", style: "margin-top:0", onClick: () => {
               const name = cn.value.trim();
               if (!name) return;
-              // Macros are entered per `base` units; `def` is the default amount a
-              // serving logs. The food's default multiplier is def/base.
+              // Macros are entered per `base` units of `unit`; `def` is the default
+              // amount a serving logs. The food's default multiplier is def/base.
               const base = +cbase.value || 1;
               const def = +cdef.value || base;
+              const unit = UNITS.some((x) => x.v === lastUnit) ? lastUnit : "g";
               const food = { n: name, c: +cc.value || 0, p: +cp.value || 0, cb: +ccb.value || 0, f: +cf.value || 0,
-                fi: +cfi.value || 0, b: base, q: Math.round((def / base) * 1000) / 1000 };
+                fi: +cfi.value || 0, b: base, q: Math.round((def / base) * 1000) / 1000, u: unit };
               const cat = CATEGORIES.indexOf(lastSlot) >= 0 ? lastSlot : CATEGORIES[0];
               const catFoods = foods[cat] = foods[cat] || [];
-              if (!catFoods.some((x) => x.n === food.n && x.c === food.c && x.p === food.p && x.cb === food.cb && x.f === food.f && (x.fi || 0) === food.fi && (x.b || 1) === food.b)) {
+              if (!catFoods.some((x) => x.n === food.n && x.c === food.c && x.p === food.p && x.cb === food.cb && x.f === food.f && (x.fi || 0) === food.fi && (x.b || 1) === food.b && (x.u || "") === food.u)) {
                 catFoods.push(food);
                 saveFoods(); // persists locally + syncs to the cloud via Store
               }
