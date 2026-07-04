@@ -134,7 +134,7 @@
     .topTiles { display:flex; gap:10px; margin-bottom:14px; }
     .topTile { flex:1; min-width:0; position:relative; overflow:hidden; background:var(--ink);
       border:1px solid var(--line); border-radius:14px; padding:12px 14px; }
-    .wImg { position:absolute; right:-14px; top:0; bottom:0; height:100%; width:auto;
+    .wImg { position:absolute; right:-45px; top:0; bottom:0; height:100%; width:auto;
       object-fit:contain; object-position:right bottom; pointer-events:none; user-select:none; }
     .topLabel { font-size:11px; letter-spacing:1px; text-transform:uppercase; color:var(--mute);
       font-weight:700; margin-bottom:7px; }
@@ -217,6 +217,22 @@
     .slotTitle { font-size:11px; letter-spacing:2px; color:var(--mute); font-weight:700;
       text-transform:uppercase; margin:16px 0 8px; }
     .slotTitle:first-of-type { margin-top:4px; }
+
+    /* collapsible catalog category header (dropdown) */
+    .catHdr { display:flex; align-items:center; justify-content:space-between; width:100%;
+      background:var(--panel); border:1px solid var(--line); border-radius:12px;
+      padding:12px 14px; margin:8px 0 0; cursor:pointer; }
+    .catHdr:first-of-type { margin-top:4px; }
+    .catHdr:active { background:var(--ink); }
+    .catHdr.open { border-radius:12px 12px 0 0; }
+    .catHdrName { font-size:11px; letter-spacing:2px; text-transform:uppercase;
+      font-weight:700; color:var(--mute); }
+    .catHdr.open .catHdrName { color:#fff; }
+    .catHdrRight { display:flex; align-items:center; gap:11px; }
+    .catCount { font-size:12px; font-weight:700; color:var(--mute); background:var(--ink);
+      border:1px solid var(--line); border-radius:20px; padding:1px 9px; min-width:24px; text-align:center; }
+    .catChev { color:var(--mute); font-size:13px; line-height:1; }
+    .catGrid { margin-top:7px; margin-bottom:2px; }
     .presets { display:flex; flex-direction:column; gap:7px; min-height:4px; }
     .presets .dropHint { width:100%; }
     .preset { display:flex; align-items:stretch; width:100%; background:var(--panel); border:1px solid var(--line);

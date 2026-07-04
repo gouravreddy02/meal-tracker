@@ -213,6 +213,7 @@
   let tab = "log"; // log (journal) | catalog | newfood (create form)
   let editQty = null; // index of the journal item whose qty box is being edited
   let mealPickFor = null; // { cat, i } of the catalog food whose meal dropdown is open
+  let catOpen = {}; // { <category>: true } — which catalog categories are expanded
   // Quantity display: drop a trailing ".0" so whole numbers stay clean.
   const fmtQ = (n) => (Number.isInteger(n) ? String(n) : String(Math.round(n * 100) / 100));
   let lastSlot = CATEGORIES[0]; // category a freshly-created food lands in
@@ -1067,8 +1068,18 @@
         onClick: () => { tab = "newfood"; render(); } }, "+ New food"));
       CATEGORIES.forEach((cat) => {
         const list = foods[cat] || [];
-        wrap.appendChild(el("div", { class: "slotTitle" }, cat));
-        const grid = el("div", { class: "presets", "data-slot": cat });
+        const open = !!catOpen[cat];
+        // Tappable category header (dropdown): shows the item count + a chevron and
+        // toggles its food list open/closed.
+        wrap.appendChild(el("button", { class: "catHdr" + (open ? " open" : ""),
+          onClick: () => { catOpen[cat] = !open; render(); } },
+          el("span", { class: "catHdrName" }, cat),
+          el("span", { class: "catHdrRight" },
+            el("span", { class: "catCount" }, String(list.length)),
+            el("span", { class: "catChev" }, open ? "▾" : "▸"))
+        ));
+        if (!open) return; // collapsed — don't render the food chips
+        const grid = el("div", { class: "presets catGrid", "data-slot": cat });
         list.forEach((p, i) => {
           const q = p.q || 1;
           const open = mealPickFor && mealPickFor.cat === cat && mealPickFor.i === i;
