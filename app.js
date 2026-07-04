@@ -66,16 +66,17 @@
   function phaseTargets(phase) {
     const b = P.targets;
     const fiber = b.fiber || 0; // fiber is a floor; it doesn't scale with calories
+    const sugar = b.sugar || 0; // added-sugar limit; also held constant across phases
     const carbsFrom = (cal, protein, fat) => Math.max(0, Math.round((cal - protein * 4 - fat * 9) / 4));
     if (phase === "recomp") {
       const cal = Math.round((b.cal * 0.84) / 10) * 10, protein = b.protein + 20, fat = b.fat;
-      return { cal, protein, carbs: carbsFrom(cal, protein, fat), fat, fiber };
+      return { cal, protein, carbs: carbsFrom(cal, protein, fat), fat, fiber, sugar };
     }
     if (phase === "cut") {
       const cal = Math.round((b.cal * 0.7) / 10) * 10, protein = b.protein + 40, fat = Math.round(b.fat * 0.8);
-      return { cal, protein, carbs: carbsFrom(cal, protein, fat), fat, fiber };
+      return { cal, protein, carbs: carbsFrom(cal, protein, fat), fat, fiber, sugar };
     }
-    return { ...b, fiber }; // bulk
+    return { ...b, fiber, sugar }; // bulk
   }
 
   // The 7 Date objects of a week, in order.
@@ -126,13 +127,17 @@
     return out;
   }
   const sortWeeks = (arr) => arr.slice().sort((a, b) => (a.startDate < b.startDate ? -1 : a.startDate > b.startDate ? 1 : 0));
-  // Backfill a fiber target on weeks saved before fiber existed, so T.fiber is
-  // always defined. Returns true if anything changed (so callers can persist).
+  // Backfill fiber/added-sugar targets on weeks saved before those existed, so
+  // T.fiber / T.sugar are always defined. Returns true if anything changed.
   function normalizeWeeks(arr) {
     let changed = false;
     arr.forEach((wk) => {
       if (wk.targets && wk.targets.fiber == null) {
         wk.targets = { ...wk.targets, fiber: phaseTargets(phaseOf(wk)).fiber };
+        changed = true;
+      }
+      if (wk.targets && wk.targets.sugar == null) {
+        wk.targets = { ...wk.targets, sugar: phaseTargets(phaseOf(wk)).sugar };
         changed = true;
       }
     });
@@ -253,9 +258,9 @@
     dayItems().filter(isEaten).reduce(
       (a, it) => {
         const q = it.q || 1;
-        return { c: a.c + it.c * q, p: a.p + it.p * q, cb: a.cb + it.cb * q, f: a.f + it.f * q, fi: a.fi + (it.fi || 0) * q };
+        return { c: a.c + it.c * q, p: a.p + it.p * q, cb: a.cb + it.cb * q, f: a.f + it.f * q, fi: a.fi + (it.fi || 0) * q, sg: a.sg + (it.sg || 0) * q };
       },
-      { c: 0, p: 0, cb: 0, f: 0, fi: 0 }
+      { c: 0, p: 0, cb: 0, f: 0, fi: 0, sg: 0 }
     );
   const weekAvg = (days) => {
     const vals = days
@@ -292,7 +297,7 @@
   // in (q × b): servings for plan foods, or grams for custom foods whose macros
   // were entered per N units. `s` is the meal it sits in.
   function snapItem(meal, p, q) {
-    return { n: p.n, c: p.c, p: p.p, cb: p.cb, f: p.f, fi: p.fi || 0, s: meal, q, b: p.b || 1, u: p.u || "" };
+    return { n: p.n, c: p.c, p: p.p, cb: p.cb, f: p.f, fi: p.fi || 0, sg: p.sg || 0, s: meal, q, b: p.b || 1, u: p.u || "" };
   }
   // Amount label for the red box: the amount (q × b) with its unit, e.g. "200 g".
   const amountLabel = (amt, u) => fmtQ(amt) + (u ? " " + u : "");
@@ -593,10 +598,10 @@
     return el("div", { class: "weekEditor" },
       el("div", { class: "edLabel" }, "Phase"),
       phasePills(wk),
-      el("div", { class: "edLabel" }, "Targets (cal · protein · carbs · fat · fiber)"),
+      el("div", { class: "edLabel" }, "Targets (cal · protein · carbs · fat · fiber · added sugar)"),
       el("div", { class: "crow" }, mk("cal"), mk("protein")),
       el("div", { class: "crow" }, mk("carbs"), mk("fat")),
-      el("div", { class: "crow" }, mk("fiber")),
+      el("div", { class: "crow" }, mk("fiber"), mk("sugar")),
       el("div", { class: "edLabel" }, "Start date"),
       sd,
       el("div", { class: "crow" },
@@ -718,8 +723,8 @@
   function dayMacros(key) {
     return (logs[key] || []).filter(isEaten).reduce((a, it) => {
       const q = it.q || 1;
-      return { c: a.c + it.c * q, p: a.p + it.p * q, cb: a.cb + it.cb * q, f: a.f + it.f * q, fi: a.fi + (it.fi || 0) * q };
-    }, { c: 0, p: 0, cb: 0, f: 0, fi: 0 });
+      return { c: a.c + it.c * q, p: a.p + it.p * q, cb: a.cb + it.cb * q, f: a.f + it.f * q, fi: a.fi + (it.fi || 0) * q, sg: a.sg + (it.sg || 0) * q };
+    }, { c: 0, p: 0, cb: 0, f: 0, fi: 0, sg: 0 });
   }
 
   function statTile(value, unitStr, label) {
@@ -803,8 +808,8 @@
     const loggedDays = Object.keys(logs).filter((k) => (logs[k] || []).some(isEaten));
     const sum = loggedDays.reduce((a, k) => {
       const m = dayMacros(k);
-      return { c: a.c + m.c, p: a.p + m.p, cb: a.cb + m.cb, f: a.f + m.f, fi: a.fi + m.fi };
-    }, { c: 0, p: 0, cb: 0, f: 0, fi: 0 });
+      return { c: a.c + m.c, p: a.p + m.p, cb: a.cb + m.cb, f: a.f + m.f, fi: a.fi + m.fi, sg: a.sg + m.sg };
+    }, { c: 0, p: 0, cb: 0, f: 0, fi: 0, sg: 0 });
     const n = loggedDays.length;
     const avg = (x) => (n ? Math.round(x / n) : 0);
 
@@ -816,7 +821,8 @@
         statTile(avg(sum.p).toLocaleString(), "g", "Avg protein"),
         statTile(avg(sum.cb).toLocaleString(), "g", "Avg carbs"),
         statTile(avg(sum.f).toLocaleString(), "g", "Avg fat"),
-        statTile(avg(sum.fi).toLocaleString(), "g", "Avg fiber")
+        statTile(avg(sum.fi).toLocaleString(), "g", "Avg fiber"),
+        statTile(avg(sum.sg).toLocaleString(), "g", "Avg added sugar")
       ));
     } else {
       nutri.appendChild(el("div", { class: "empty" }, "No meals logged yet."));
@@ -976,7 +982,6 @@
         );
       })(),
       el("div", { class: "topTile" },
-        el("img", { class: "wImg", src: "images/image_2.png", alt: "" }),
         el("div", { class: "topLabel" }, "Weight"),
         el("div", { class: "wRow" }, wInput,
           el("button", { class: "wunit", title: "Tap to switch units", onClick: toggleUnit }, unit)),
@@ -995,7 +1000,8 @@
       macroRing("Protein", tt.p, T.protein, RING.protein),
       macroRing("Carbs", tt.cb, T.carbs, RING.carbs),
       macroRing("Fat", tt.f, T.fat, RING.fat),
-      macroRing("Fiber", tt.fi, T.fiber, RING.fiber)
+      macroRing("Fiber", tt.fi, T.fiber, RING.fiber),
+      macroRing("Added sugar", tt.sg, T.sugar, RING.sugar)
     ));
     wrap.appendChild(card);
 
@@ -1050,7 +1056,8 @@
                   el("span", { class: "pmac" }, "P " + Math.round(it.p * q)),
                   el("span", { class: "pmac" }, "C " + Math.round(it.cb * q)),
                   el("span", { class: "pmac" }, "F " + Math.round(it.f * q)),
-                  el("span", { class: "pmac" }, "Fb " + Math.round((it.fi || 0) * q))
+                  el("span", { class: "pmac" }, "Fb " + Math.round((it.fi || 0) * q)),
+                  el("span", { class: "pmac" }, "Sug " + Math.round((it.sg || 0) * q))
                 )
               ),
               el("button", { class: "pdel", title: "Remove from day",
@@ -1093,7 +1100,8 @@
                 el("span", { class: "pmac" }, "P " + Math.round(p.p * q)),
                 el("span", { class: "pmac" }, "C " + Math.round(p.cb * q)),
                 el("span", { class: "pmac" }, "F " + Math.round(p.f * q)),
-                el("span", { class: "pmac" }, "Fb " + Math.round((p.fi || 0) * q))
+                el("span", { class: "pmac" }, "Fb " + Math.round((p.fi || 0) * q)),
+                el("span", { class: "pmac" }, "Sug " + Math.round((p.sg || 0) * q))
               )
             ),
             el("button", { class: "pdel", title: "Delete from catalog",
@@ -1135,6 +1143,7 @@
       const ccb = el("input", { class: "ci", inputmode: "decimal", placeholder: "carbs" });
       const cf = el("input", { class: "ci", inputmode: "decimal", placeholder: "fat" });
       const cfi = el("input", { class: "ci", inputmode: "decimal", placeholder: "fiber" });
+      const csg = el("input", { class: "ci", inputmode: "decimal", placeholder: "added sugar" });
       const cs = el("select", { class: "ci", onChange: (e) => { lastSlot = e.target.value; } });
       CATEGORIES.forEach((s) => {
         const opt = el("option", { value: s }, s);
@@ -1149,7 +1158,7 @@
           el("div", { class: "crow" }, cbase, cu),
           el("div", { class: "crow" }, cc, cp),
           el("div", { class: "crow" }, ccb, cf),
-          cfi,
+          el("div", { class: "crow" }, cfi, csg),
           el("div", { class: "edLabel" }, "Default amount to log"),
           cdef,
           el("div", { class: "edLabel" }, "Category"),
@@ -1165,10 +1174,10 @@
               const def = +cdef.value || base;
               const unit = UNITS.some((x) => x.v === lastUnit) ? lastUnit : "g";
               const food = { n: name, c: +cc.value || 0, p: +cp.value || 0, cb: +ccb.value || 0, f: +cf.value || 0,
-                fi: +cfi.value || 0, b: base, q: Math.round((def / base) * 1000) / 1000, u: unit };
+                fi: +cfi.value || 0, sg: +csg.value || 0, b: base, q: Math.round((def / base) * 1000) / 1000, u: unit };
               const cat = CATEGORIES.indexOf(lastSlot) >= 0 ? lastSlot : CATEGORIES[0];
               const catFoods = foods[cat] = foods[cat] || [];
-              if (!catFoods.some((x) => x.n === food.n && x.c === food.c && x.p === food.p && x.cb === food.cb && x.f === food.f && (x.fi || 0) === food.fi && (x.b || 1) === food.b && (x.u || "") === food.u)) {
+              if (!catFoods.some((x) => x.n === food.n && x.c === food.c && x.p === food.p && x.cb === food.cb && x.f === food.f && (x.fi || 0) === food.fi && (x.sg || 0) === food.sg && (x.b || 1) === food.b && (x.u || "") === food.u)) {
                 catFoods.push(food);
                 saveFoods(); // persists locally + syncs to the cloud via Store
               }
@@ -1192,6 +1201,7 @@
     carbs:   ["#2a9bd4", "#9ae2ff"],
     fat:     ["#d96a3a", "#ffb98c"],
     fiber:   ["#1f9e7d", "#6bf0cf"],
+    sugar:   ["#b83b78", "#ff9ecb"],
   };
   // A macro as an Apple activity-style ring: a conic-gradient donut that fills to
   // the target, then laps a second time when over — with a rounded, shadowed tip

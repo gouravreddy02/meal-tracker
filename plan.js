@@ -20,7 +20,7 @@ window.PLAN = {
   // runs; after that, cycles (their duration + targets) are created and edited in
   // the app's Cycles page and saved per-device/synced, so editing these values
   // only affects a fresh install.
-  targets: { cal: 3800, protein: 155, carbs: 377, fat: 127, fiber: 50 },
+  targets: { cal: 3800, protein: 155, carbs: 377, fat: 127, fiber: 50, sugar: 40 },
   startDate: "2026-06-20", // YYYY-MM-DD — Cycle 1 start
   numDays: 14,             // Cycle 1 length (rounded to whole weeks)
 
@@ -32,7 +32,7 @@ window.PLAN = {
   },
 
   // Food catalog — your master library, grouped by macro category. Macros:
-  // c=calories, p=protein, cb=carbs, f=fat, fi=fiber (grams). Categories render in
+  // c=calories, p=protein, cb=carbs, f=fat, fi=fiber, sg=added sugar (grams). Categories render in
   // the order listed below and are the sections shown in the Catalog tab. The chip
   // colour is derived from each food's *dominant* macro at render time, so where you
   // file a food only affects organization, not its colour. Add/edit/move foods
