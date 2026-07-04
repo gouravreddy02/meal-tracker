@@ -35,16 +35,17 @@
   // These only pre-fill the editable target inputs; the user can override.
   function phaseTargets(phase) {
     const b = P.targets;
+    const fiber = b.fiber || 0; // fiber is a floor; it doesn't scale with calories
     const carbsFrom = (cal, protein, fat) => Math.max(0, Math.round((cal - protein * 4 - fat * 9) / 4));
     if (phase === "recomp") {
       const cal = Math.round((b.cal * 0.84) / 10) * 10, protein = b.protein + 20, fat = b.fat;
-      return { cal, protein, carbs: carbsFrom(cal, protein, fat), fat };
+      return { cal, protein, carbs: carbsFrom(cal, protein, fat), fat, fiber };
     }
     if (phase === "cut") {
       const cal = Math.round((b.cal * 0.7) / 10) * 10, protein = b.protein + 40, fat = Math.round(b.fat * 0.8);
-      return { cal, protein, carbs: carbsFrom(cal, protein, fat), fat };
+      return { cal, protein, carbs: carbsFrom(cal, protein, fat), fat, fiber };
     }
-    return { ...b }; // bulk
+    return { ...b, fiber }; // bulk
   }
 
   // The 7 Date objects of a week, in order.
@@ -95,12 +96,26 @@
     return out;
   }
   const sortWeeks = (arr) => arr.slice().sort((a, b) => (a.startDate < b.startDate ? -1 : a.startDate > b.startDate ? 1 : 0));
+  // Backfill a fiber target on weeks saved before fiber existed, so T.fiber is
+  // always defined. Returns true if anything changed (so callers can persist).
+  function normalizeWeeks(arr) {
+    let changed = false;
+    arr.forEach((wk) => {
+      if (wk.targets && wk.targets.fiber == null) {
+        wk.targets = { ...wk.targets, fiber: phaseTargets(phaseOf(wk)).fiber };
+        changed = true;
+      }
+    });
+    return changed;
+  }
   // Load weeks oldest-first; migrate from legacy cycles or seed from PLAN once.
   function loadWeeks() {
     let w = window.Store.getWeeks();
     if (!w || !w.length) {
       const cys = window.Store.getCycles();
       w = cys && cys.length ? migrateCycles(cys) : seedWeeks();
+      window.Store.setWeeks(w);
+    } else if (normalizeWeeks(w)) {
       window.Store.setWeeks(w);
     }
     return sortWeeks(w);
@@ -182,9 +197,9 @@
     dayItems().reduce(
       (a, it) => {
         const q = it.q || 1;
-        return { c: a.c + it.c * q, p: a.p + it.p * q, cb: a.cb + it.cb * q, f: a.f + it.f * q };
+        return { c: a.c + it.c * q, p: a.p + it.p * q, cb: a.cb + it.cb * q, f: a.f + it.f * q, fi: a.fi + (it.fi || 0) * q };
       },
-      { c: 0, p: 0, cb: 0, f: 0 }
+      { c: 0, p: 0, cb: 0, f: 0, fi: 0 }
     );
   const weekAvg = (days) => {
     const vals = days
@@ -225,7 +240,7 @@
   // *amount* the user thinks in (q × b): servings for plan foods, or grams for
   // custom foods whose macros were entered per N grams.
   function snapItem(slot, p, q) {
-    return { n: p.n, c: p.c, p: p.p, cb: p.cb, f: p.f, s: slot, q, b: p.b || 1 };
+    return { n: p.n, c: p.c, p: p.p, cb: p.cb, f: p.f, fi: p.fi || 0, s: slot, q, b: p.b || 1 };
   }
   // Tap a quick-add food to log it (at its default amount); tap green to un-log.
   function toggleFood(slot, p) {
@@ -557,9 +572,10 @@
     return el("div", { class: "weekEditor" },
       el("div", { class: "edLabel" }, "Phase"),
       phasePills(wk),
-      el("div", { class: "edLabel" }, "Targets (cal · protein · carbs · fat)"),
+      el("div", { class: "edLabel" }, "Targets (cal · protein · carbs · fat · fiber)"),
       el("div", { class: "crow" }, mk("cal"), mk("protein")),
       el("div", { class: "crow" }, mk("carbs"), mk("fat")),
+      el("div", { class: "crow" }, mk("fiber")),
       el("div", { class: "edLabel" }, "Start date"),
       sd,
       el("div", { class: "crow" },
@@ -681,8 +697,8 @@
   function dayMacros(key) {
     return (logs[key] || []).reduce((a, it) => {
       const q = it.q || 1;
-      return { c: a.c + it.c * q, p: a.p + it.p * q, cb: a.cb + it.cb * q, f: a.f + it.f * q };
-    }, { c: 0, p: 0, cb: 0, f: 0 });
+      return { c: a.c + it.c * q, p: a.p + it.p * q, cb: a.cb + it.cb * q, f: a.f + it.f * q, fi: a.fi + (it.fi || 0) * q };
+    }, { c: 0, p: 0, cb: 0, f: 0, fi: 0 });
   }
 
   function statTile(value, unitStr, label) {
@@ -766,8 +782,8 @@
     const loggedDays = Object.keys(logs).filter((k) => (logs[k] || []).length > 0);
     const sum = loggedDays.reduce((a, k) => {
       const m = dayMacros(k);
-      return { c: a.c + m.c, p: a.p + m.p, cb: a.cb + m.cb, f: a.f + m.f };
-    }, { c: 0, p: 0, cb: 0, f: 0 });
+      return { c: a.c + m.c, p: a.p + m.p, cb: a.cb + m.cb, f: a.f + m.f, fi: a.fi + m.fi };
+    }, { c: 0, p: 0, cb: 0, f: 0, fi: 0 });
     const n = loggedDays.length;
     const avg = (x) => (n ? Math.round(x / n) : 0);
 
@@ -778,7 +794,8 @@
         statTile(avg(sum.c).toLocaleString(), "cal", "Avg / day"),
         statTile(avg(sum.p).toLocaleString(), "g", "Avg protein"),
         statTile(avg(sum.cb).toLocaleString(), "g", "Avg carbs"),
-        statTile(avg(sum.f).toLocaleString(), "g", "Avg fat")
+        statTile(avg(sum.f).toLocaleString(), "g", "Avg fat"),
+        statTile(avg(sum.fi).toLocaleString(), "g", "Avg fiber")
       ));
     } else {
       nutri.appendChild(el("div", { class: "empty" }, "No meals logged yet."));
@@ -931,6 +948,7 @@
     card.appendChild(macroBar("Protein", tt.p, T.protein, "var(--lime)"));
     card.appendChild(macroBar("Carbs", tt.cb, T.carbs, "var(--blue)"));
     card.appendChild(macroBar("Fat", tt.f, T.fat, "var(--orange)"));
+    card.appendChild(macroBar("Fiber", tt.fi, T.fiber, "var(--teal)"));
     wrap.appendChild(card);
 
     // tabs
@@ -976,7 +994,8 @@
                 el("span", { class: "pcal" }, Math.round(p.c * q) + " cal"),
                 el("span", { class: "pmac" }, "P " + Math.round(p.p * q)),
                 el("span", { class: "pmac" }, "C " + Math.round(p.cb * q)),
-                el("span", { class: "pmac" }, "F " + Math.round(p.f * q))
+                el("span", { class: "pmac" }, "F " + Math.round(p.f * q)),
+                el("span", { class: "pmac" }, "Fb " + Math.round((p.fi || 0) * q))
               )
             )
           );
@@ -1020,6 +1039,7 @@
       const cp = el("input", { class: "ci", inputmode: "decimal", placeholder: "protein" });
       const ccb = el("input", { class: "ci", inputmode: "decimal", placeholder: "carbs" });
       const cf = el("input", { class: "ci", inputmode: "decimal", placeholder: "fat" });
+      const cfi = el("input", { class: "ci", inputmode: "decimal", placeholder: "fiber" });
       const cdef = el("input", { class: "ci", inputmode: "decimal", placeholder: "default amount (e.g. 200)" });
       const cs = el("select", { class: "ci", onChange: (e) => { lastSlot = e.target.value; } });
       SLOTS.forEach((s) => {
@@ -1033,6 +1053,7 @@
           cbase,
           el("div", { class: "crow" }, cc, cp),
           el("div", { class: "crow" }, ccb, cf),
+          cfi,
           cdef,
           cs,
           el("button", { class: "addBtn", onClick: () => {
@@ -1043,11 +1064,11 @@
             const base = +cbase.value || 1;
             const def = +cdef.value || base;
             const food = { n: name, c: +cc.value || 0, p: +cp.value || 0, cb: +ccb.value || 0, f: +cf.value || 0,
-              b: base, q: Math.round((def / base) * 1000) / 1000 };
+              fi: +cfi.value || 0, b: base, q: Math.round((def / base) * 1000) / 1000 };
             addItem({ ...food, s: lastSlot });
             // Also save to Quick add for this slot, skipping exact duplicates.
             const slotFoods = foods[lastSlot] = foods[lastSlot] || [];
-            if (!slotFoods.some((q) => !q.to && q.n === food.n && q.c === food.c && q.p === food.p && q.cb === food.cb && q.f === food.f && (q.b || 1) === food.b)) {
+            if (!slotFoods.some((q) => !q.to && q.n === food.n && q.c === food.c && q.p === food.p && q.cb === food.cb && q.f === food.f && (q.fi || 0) === food.fi && (q.b || 1) === food.b)) {
               slotFoods.push(food);
               saveFoods(); // persists locally + syncs to the cloud via Store
             }
