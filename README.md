@@ -5,8 +5,14 @@ required after first load. Your data lives in your browser (localStorage).
 
 ## What it does
 
-- Log meals per day by tapping preset foods, or add custom ones
-- See running calories + protein / carbs / fat against your daily targets
+- Keep a **food catalog** — your library of foods, grouped by macro category
+  (Protein / Carbs / Fruit / Fat / Vegetables / Snacks). Add new foods with **+ New food**.
+- **Plan each day, then check off what you eat:** tap a catalog food and pick a
+  meal (Before workout / After workout / Lunch / Snacks / Dinner) — it drops into
+  the day's **Log items** journal as a *planned* (greyed) item. Tap a planned item
+  to mark it *eaten*; it turns its macro colour and starts counting.
+- See running calories + protein / carbs / fat against your daily targets (only
+  eaten items count)
 - Log morning weight; auto-calculates Week 1 vs Week 2 averages and tells you
   whether to hold, add, or trim calories
 - Export / import a JSON backup so you can move data between devices
@@ -54,7 +60,7 @@ Once added to your home screen it behaves like a native app and works offline.
 | File | What it is |
 |------|-----------|
 | `index.html` | App shell + all styling |
-| `plan.js` | **Your targets and food list — edit this freely** |
+| `plan.js` | **Your targets and food catalog (by macro category) — edit this freely** |
 | `store.js` | Data persistence (localStorage). Swap for cloud sync later. |
 | `app.js` | UI and logic |
 | `sw.js` | Service worker (offline caching) |

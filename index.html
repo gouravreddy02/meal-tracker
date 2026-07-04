@@ -242,6 +242,29 @@
     .preset.removing { cursor:default; }
     .preset.removing .pdel { color:var(--red); font-weight:700; }
 
+    /* dominant-macro accent colour (set per chip via .macro-* classes) */
+    .macro-protein { --macro:var(--lime); }
+    .macro-carbs   { --macro:var(--blue); }
+    .macro-fat     { --macro:var(--orange); }
+    /* catalog chip: shows its macro as a left accent stripe */
+    .preset.catalog { border-left:4px solid var(--macro, var(--line)); }
+    /* journal: planned = greyed out (not yet eaten, doesn't count) */
+    .preset.planned { background:var(--ink); border-style:dashed; opacity:.5; }
+    /* journal: eaten = filled with its macro colour, and counts toward totals */
+    .preset.eaten { background:var(--macro, var(--lime)); border-color:var(--macro, var(--lime)); color:var(--ink); }
+    .preset.eaten .pmacros { color:rgba(26,22,38,.7); }
+    .preset.eaten .pcal { color:var(--ink); }
+    .preset.eaten .pdel { color:rgba(26,22,38,.55); }
+
+    /* meal picker dropdown revealed under a tapped catalog food */
+    .mealMenu { background:var(--panel); border:1px solid var(--line); border-radius:11px;
+      padding:8px; display:flex; flex-direction:column; gap:6px; }
+    .mealMenuHdr { font-size:10px; letter-spacing:1px; text-transform:uppercase;
+      color:var(--mute); font-weight:700; padding:1px 2px 3px; }
+    .mealOpt { text-align:left; background:var(--ink); border:1px solid var(--line); color:#fff;
+      border-radius:9px; padding:9px 12px; font-size:13px; font-weight:600; cursor:pointer; }
+    .mealOpt:active { background:var(--lime); color:var(--ink); border-color:var(--lime); }
+
     .customBox { background:var(--panel); border-radius:14px; padding:14px; border:1px solid var(--line); }
     .ci { width:100%; background:var(--ink); border:1px solid var(--line); color:#fff;
       border-radius:10px; padding:10px 12px; font-size:14px; outline:none; margin-bottom:8px; }

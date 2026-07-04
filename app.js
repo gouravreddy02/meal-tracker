@@ -14,8 +14,26 @@
     return new Date(y, m - 1, dd);
   };
 
-  // Meal slots, in display order. Logged items carry their slot in `s`.
-  const SLOTS = Object.keys(P.foods);
+  // Two independent axes:
+  //  • CATEGORIES — the catalog's macro groups (config-driven, from PLAN.foods).
+  //  • MEALS      — how the day's journal is grouped; a journal item carries its
+  //    meal in `s`. A catalog food is planned into one of these meals.
+  const CATEGORIES = Object.keys(P.foods);
+  const MEALS = ["Before workout", "After workout", "Lunch", "Snacks", "Dinner"];
+  // Which meal a journal item belongs to (legacy/unknown slots fall under Snacks).
+  const mealOf = (it) => (MEALS.indexOf(it.s) >= 0 ? it.s : "Snacks");
+  // A journal item counts toward totals only once eaten. Legacy items (saved
+  // before this field existed) have no `eaten` flag, so treat them as eaten.
+  const isEaten = (it) => it.eaten !== false;
+  // A food's dominant macro (by grams) → drives its chip colour. Ties: P → C → F.
+  function macroOf(it) {
+    const p = it.p || 0, c = it.cb || 0, f = it.f || 0;
+    if (p >= c && p >= f) return "protein";
+    if (c >= f) return "carbs";
+    return "fat";
+  }
+  // Category a food lands in when auto-sorted by its dominant macro.
+  const catForMacro = (m) => (m === "protein" ? "Protein" : m === "carbs" ? "Carbs" : "Fat");
 
   // ---- diet weeks ----
   // The plan is a flat, ordered list of weeks. Each week spans 7 consecutive days
@@ -153,15 +171,39 @@
     const r = Math.round(n * 10) / 10;
     return Number.isInteger(r) ? String(r) : r.toFixed(1);
   };
-  // Quick-add foods: the user's saved arrangement, or a fresh copy of the
-  // PLAN default the first time. Reordered via drag, then persisted.
-  let foods = window.Store.getFoods() || JSON.parse(JSON.stringify(P.foods));
+  // Regroup a legacy meal-keyed catalog into macro categories by dominant macro.
+  // (Snacks isn't auto-filled — the user files snacky foods there themselves.)
+  function migrateFoods(old) {
+    const out = {};
+    CATEGORIES.forEach((c) => (out[c] = []));
+    Object.keys(old).forEach((slot) => {
+      (old[slot] || []).forEach((f) => {
+        if (f.to) return; // was a date-scoped deletion; drop from the fresh catalog
+        const { to, s, ...clean } = f; // strip legacy per-day delete/slot fields
+        const cat = catForMacro(macroOf(f));
+        (out[cat] = out[cat] || []).push(clean);
+      });
+    });
+    return out;
+  }
+  // The catalog: the user's saved library, migrated from the old meal-keyed shape
+  // if needed, or a fresh copy of the PLAN default the first time.
+  function loadFoods() {
+    const saved = window.Store.getFoods();
+    if (!saved) return JSON.parse(JSON.stringify(P.foods));
+    if (CATEGORIES.some((c) => c in saved)) return saved; // already category-keyed
+    const migrated = migrateFoods(saved);
+    window.Store.setFoods(migrated); // persist the one-time migration
+    return migrated;
+  }
+  let foods = loadFoods();
   let selected = todayOrFirst(weekDates(activeWeek()));
-  let tab = "quick"; // quick | custom
-  let editQty = null; // { slot, i } of the quick-add food whose qty box is being edited
+  let tab = "log"; // log (journal) | catalog | newfood (create form)
+  let editQty = null; // index of the journal item whose qty box is being edited
+  let mealPickFor = null; // { cat, i } of the catalog food whose meal dropdown is open
   // Quantity display: drop a trailing ".0" so whole numbers stay clean.
   const fmtQ = (n) => (Number.isInteger(n) ? String(n) : String(Math.round(n * 100) / 100));
-  let lastSlot = SLOTS[0]; // section a freshly-added custom food lands in
+  let lastSlot = CATEGORIES[0]; // category a freshly-created food lands in
   let authMsg = "";      // transient cloud-sync status/error message
   let authReady = false; // has the Firebase SDK reported initial auth state yet?
   let localOnly = false; // user chose to skip login and use this device only
@@ -170,7 +212,7 @@
   window.Store.onSync(() => {
     logs = window.Store.getLogs();
     weights = window.Store.getWeights();
-    foods = window.Store.getFoods() || JSON.parse(JSON.stringify(P.foods));
+    foods = loadFoods();
     weeks = loadWeeks();
     if (!weeks.some((w) => w.id === activeWeekId)) activeWeekId = weeks[weeks.length - 1].id;
     selected = todayOrFirst(weekDates(activeWeek()));
@@ -194,7 +236,7 @@
   // ---- derived ----
   const dayItems = () => logs[selected] || [];
   const totals = () =>
-    dayItems().reduce(
+    dayItems().filter(isEaten).reduce(
       (a, it) => {
         const q = it.q || 1;
         return { c: a.c + it.c * q, p: a.p + it.p * q, cb: a.cb + it.cb * q, f: a.f + it.f * q, fi: a.fi + (it.fi || 0) * q };
@@ -230,106 +272,70 @@
     saveLogs();
     render();
   }
-  // Identity of a quick-add food, used to tell whether it's already logged for
-  // the selected day (and to find which logged item to remove when toggled off).
-  const foodKey = (p) => `${p.n}|${p.c}|${p.p}|${p.cb}|${p.f}`;
-  const isLogged = (slot, p) =>
-    dayItems().some((it) => it.s === slot && foodKey(it) === foodKey(p));
-  // Macros are stored "per base amount" `b` (default 1 — a single serving).
-  // Effective macros = stored macros × multiplier `q`. The red box shows the
-  // *amount* the user thinks in (q × b): servings for plan foods, or grams for
-  // custom foods whose macros were entered per N grams.
-  function snapItem(slot, p, q) {
-    return { n: p.n, c: p.c, p: p.p, cb: p.cb, f: p.f, fi: p.fi || 0, s: slot, q, b: p.b || 1 };
+  // A journal item is a snapshot of a catalog food dropped into a meal. Macros are
+  // stored "per base amount" `b` (default 1 — a single serving); effective macros =
+  // stored macros × multiplier `q`. The red box shows the *amount* the user thinks
+  // in (q × b): servings for plan foods, or grams for custom foods whose macros
+  // were entered per N units. `s` is the meal it sits in.
+  function snapItem(meal, p, q) {
+    return { n: p.n, c: p.c, p: p.p, cb: p.cb, f: p.f, fi: p.fi || 0, s: meal, q, b: p.b || 1 };
   }
-  // Tap a quick-add food to log it (at its default amount); tap green to un-log.
-  function toggleFood(slot, p) {
-    const items = dayItems();
-    const idx = items.findIndex((it) => it.s === slot && foodKey(it) === foodKey(p));
-    if (idx === -1) {
-      addItem(snapItem(slot, p, p.q || 1));
-      return;
-    }
-    const next = items.slice();
-    next.splice(idx, 1);
-    logs = { ...logs, [selected]: next };
+  // Plan a catalog food into a meal for the selected day. It lands greyed out
+  // (eaten:false) and doesn't count toward totals until it's tapped to "eaten".
+  function planFood(meal, p) {
+    mealPickFor = null;
+    addItem({ ...snapItem(meal, p, p.q || 1), eaten: false });
+  }
+  // Tap a journal item to flip planned⇄eaten. Only eaten items count in totals().
+  function toggleEaten(idx) {
+    const items = dayItems().slice();
+    if (!items[idx]) return;
+    items[idx] = { ...items[idx], eaten: !isEaten(items[idx]) };
+    logs = { ...logs, [selected]: items };
     saveLogs();
     render();
   }
-  // Base amount the macros are quoted per. Logged items carry their own snapshot.
-  function baseOf(slot, p) {
-    const it = dayItems().find((x) => x.s === slot && foodKey(x) === foodKey(p));
-    return (it ? it.b : p.b) || 1;
+  // Remove a single journal item from the selected day.
+  function removeJournalItem(idx) {
+    const items = dayItems().slice();
+    if (idx < 0 || idx >= items.length) return;
+    items.splice(idx, 1);
+    logs = { ...logs, [selected]: items };
+    saveLogs();
+    render();
   }
-  // Multiplier: the logged day's value, or the food's default when not logged.
-  function qtyOf(slot, p) {
-    const it = dayItems().find((x) => x.s === slot && foodKey(x) === foodKey(p));
-    return (it ? it.q : p.q) || 1;
-  }
-  // Amount shown in the red box = multiplier × base amount.
-  const amountOf = (slot, p) => qtyOf(slot, p) * baseOf(slot, p);
-  // Commit an edited amount for the selected day only. The typed value is an
-  // amount (q × b); convert back to a multiplier. If the food is already logged,
-  // update that day's amount; otherwise log it at that amount.
-  function commitQty(slot, i, val) {
-    const p = foods[slot][i];
-    const base = baseOf(slot, p);
+  // Commit an edited amount (q × b) for one journal item on the selected day; the
+  // typed value is an amount, converted back to the stored multiplier `q`.
+  function commitJournalQty(idx, val) {
+    editQty = null;
+    const items = dayItems().slice();
+    const it = items[idx];
+    if (!it) return render();
+    const base = it.b || 1;
     let amt = parseFloat(val);
     if (!isFinite(amt) || amt <= 0) amt = base; // fall back to one base unit
-    const q = Math.round((amt / base) * 1000) / 1000;
-    editQty = null;
-    const items = dayItems();
-    const idx = items.findIndex((it) => it.s === slot && foodKey(it) === foodKey(p));
-    if (idx >= 0) {
-      const next = items.slice();
-      next[idx] = { ...next[idx], q };
-      logs = { ...logs, [selected]: next };
-      saveLogs();
-      render();
-    } else {
-      addItem(snapItem(slot, p, q));
-    }
+    items[idx] = { ...it, q: Math.round((amt / base) * 1000) / 1000 };
+    logs = { ...logs, [selected]: items };
+    saveLogs();
+    render();
   }
 
   function saveFoods() { flash(window.Store.setFoods(foods)); }
-  // A quick-add food is hidden on the selected day if it was deleted on or
-  // before it. `to` is the day the deletion takes effect; earlier days keep it.
-  const isHidden = (p) => !!p.to && selected >= p.to;
-  // Move a quick-add food. `fromIdx` is its real index in foods[fromSlot];
-  // `toVis` is the drop position among the *visible* foods in toSlot (some may
-  // be hidden on this day), so map it back to a real array index before insert.
-  function moveFood(fromSlot, fromIdx, toSlot, toVis) {
-    const [moved] = foods[fromSlot].splice(fromIdx, 1);
+  // Reorder / move a catalog food between categories (press-and-hold drag).
+  function moveFood(fromCat, fromIdx, toCat, toIdx) {
+    const [moved] = foods[fromCat].splice(fromIdx, 1);
     if (!moved) return render();
-    const arr = (foods[toSlot] = foods[toSlot] || []);
-    let count = 0, realTo = arr.length;
-    for (let i = 0; i < arr.length; i++) {
-      if (isHidden(arr[i])) continue;
-      if (count === toVis) { realTo = i; break; }
-      count++;
-    }
-    arr.splice(realTo, 0, moved);
+    (foods[toCat] = foods[toCat] || []).splice(toIdx, 0, moved);
     saveFoods();
     render();
   }
-  // Delete a quick-add food from the selected day onward: hide it from `selected`
-  // on, and drop any logged copies on the selected day and later days within the
-  // window. Earlier days keep both the food and its logs untouched.
-  function deleteFood(slot, p) {
-    const idx = foods[slot].indexOf(p);
-    if (idx < 0) return;
-    foods[slot] = foods[slot].slice();
-    foods[slot][idx] = { ...p, to: selected };
+  // Delete a food from the catalog. Journal entries are independent snapshots, so
+  // days that already planned this food keep their logs untouched.
+  function deleteCatalogFood(cat, i) {
+    if (!foods[cat] || !foods[cat][i]) return;
+    foods[cat] = foods[cat].slice();
+    foods[cat].splice(i, 1);
     saveFoods();
-    let changed = false;
-    const next = { ...logs };
-    weekDates(activeWeek()).forEach((d) => {
-      const k = keyFor(d);
-      if (k < selected || !next[k]) return;
-      const filtered = next[k].filter((it) => !(it.s === slot && foodKey(it) === foodKey(p)));
-      if (filtered.length !== next[k].length) { next[k] = filtered; changed = true; }
-    });
-    if (changed) { logs = next; saveLogs(); }
     render();
   }
   let wT = null;
@@ -694,7 +700,7 @@
   // ---- profile view: account + simple analysis over all logged data ----
   // Effective macros for any day key (mirrors totals(), but for an arbitrary day).
   function dayMacros(key) {
-    return (logs[key] || []).reduce((a, it) => {
+    return (logs[key] || []).filter(isEaten).reduce((a, it) => {
       const q = it.q || 1;
       return { c: a.c + it.c * q, p: a.p + it.p * q, cb: a.cb + it.cb * q, f: a.f + it.f * q, fi: a.fi + (it.fi || 0) * q };
     }, { c: 0, p: 0, cb: 0, f: 0, fi: 0 });
@@ -778,7 +784,7 @@
     wrap.appendChild(acct);
 
     // ---- nutrition analysis (over every logged day) ----
-    const loggedDays = Object.keys(logs).filter((k) => (logs[k] || []).length > 0);
+    const loggedDays = Object.keys(logs).filter((k) => (logs[k] || []).some(isEaten));
     const sum = loggedDays.reduce((a, k) => {
       const m = dayMacros(k);
       return { c: a.c + m.c, p: a.p + m.p, cb: a.cb + m.cb, f: a.f + m.f, fi: a.fi + m.fi };
@@ -980,26 +986,33 @@
     // tabs
     wrap.appendChild(
       el("div", { class: "tabs" },
-        el("button", { class: "tab" + (tab === "quick" ? " active" : ""), onClick: () => { tab = "quick"; render(); } }, "Log items"),
-        el("button", { class: "tab" + (tab === "custom" ? " active" : ""), onClick: () => { tab = "custom"; render(); } }, "Add items"),
-        el("button", { class: "tab" + (tab === "remove" ? " active" : ""), onClick: () => { tab = "remove"; render(); } }, "Remove items")
+        el("button", { class: "tab" + (tab === "log" ? " active" : ""), onClick: () => { tab = "log"; render(); } }, "Log items"),
+        el("button", { class: "tab" + (tab === "catalog" || tab === "newfood" ? " active" : ""), onClick: () => { tab = "catalog"; render(); } }, "Catalog")
       )
     );
 
-    if (tab === "quick") {
-      SLOTS.forEach((slot) => {
-        const items = foods[slot] || [];
-        wrap.appendChild(el("div", { class: "slotTitle" }, slot));
-        const grid = el("div", { class: "presets", "data-slot": slot });
-        items.forEach((p, i) => {
-          if (isHidden(p)) return; // deleted from this day onward
-          const logged = isLogged(slot, p);
+    if (tab === "log") {
+      // The day's journal, grouped by meal. Planned items are grey; tapping one
+      // marks it eaten (its macro colour) and makes it count toward the rings.
+      const items = dayItems();
+      let any = false;
+      MEALS.forEach((meal) => {
+        const entries = items
+          .map((it, idx) => ({ it, idx }))
+          .filter(({ it }) => mealOf(it) === meal);
+        if (!entries.length) return;
+        any = true;
+        wrap.appendChild(el("div", { class: "slotTitle" }, meal));
+        const grid = el("div", { class: "presets" });
+        entries.forEach(({ it, idx }) => {
+          const eaten = isEaten(it);
+          const q = it.q || 1, base = it.b || 1;
           let qtyEl;
-          if (editQty && editQty.slot === slot && editQty.i === i) {
+          if (editQty === idx) {
             let cancelled = false;
-            const inp = el("input", { class: "qinput", inputmode: "decimal", value: fmtQ(amountOf(slot, p)),
+            const inp = el("input", { class: "qinput", inputmode: "decimal", value: fmtQ(q * base),
               onClick: (e) => e.stopPropagation(),
-              onBlur: (e) => { if (!cancelled) commitQty(slot, i, e.target.value); },
+              onBlur: (e) => { if (!cancelled) commitJournalQty(idx, e.target.value); },
               onKeydown: (e) => {
                 if (e.key === "Enter") e.target.blur();
                 else if (e.key === "Escape") { cancelled = true; editQty = null; render(); }
@@ -1008,12 +1021,44 @@
             qtyEl = inp;
           } else {
             qtyEl = el("div", { class: "qty",
-              onClick: (e) => { e.stopPropagation(); editQty = { slot, i }; render(); } }, fmtQ(amountOf(slot, p)));
+              onClick: (e) => { e.stopPropagation(); editQty = idx; render(); } }, fmtQ(q * base));
           }
-          const q = qtyOf(slot, p);
-          const btn = el("div", { class: "preset draggable" + (logged ? " logged" : ""),
-            onClick: () => toggleFood(slot, p) },
-            qtyEl,
+          grid.appendChild(
+            el("div", { class: "preset " + (eaten ? "eaten macro-" + macroOf(it) : "planned"),
+              onClick: () => toggleEaten(idx) },
+              qtyEl,
+              el("div", { class: "pbody" },
+                el("span", { class: "pn" }, it.n),
+                el("span", { class: "pmacros" },
+                  el("span", { class: "pcal" }, Math.round(it.c * q) + " cal"),
+                  el("span", { class: "pmac" }, "P " + Math.round(it.p * q)),
+                  el("span", { class: "pmac" }, "C " + Math.round(it.cb * q)),
+                  el("span", { class: "pmac" }, "F " + Math.round(it.f * q)),
+                  el("span", { class: "pmac" }, "Fb " + Math.round((it.fi || 0) * q))
+                )
+              ),
+              el("button", { class: "pdel", title: "Remove from day",
+                onClick: (e) => { e.stopPropagation(); removeJournalItem(idx); } }, "×")
+            )
+          );
+        });
+        wrap.appendChild(grid);
+      });
+      if (!any) wrap.appendChild(el("div", { class: "empty" }, "Nothing planned yet. Add foods from the Catalog."));
+    } else if (tab === "catalog") {
+      // Master food library, grouped by macro category. Tap a food to open a meal
+      // dropdown and drop it into the day's journal (as a planned item).
+      wrap.appendChild(el("button", { class: "addBtn", style: "margin-bottom:4px",
+        onClick: () => { tab = "newfood"; render(); } }, "+ New food"));
+      CATEGORIES.forEach((cat) => {
+        const list = foods[cat] || [];
+        wrap.appendChild(el("div", { class: "slotTitle" }, cat));
+        const grid = el("div", { class: "presets", "data-slot": cat });
+        list.forEach((p, i) => {
+          const q = p.q || 1;
+          const open = mealPickFor && mealPickFor.cat === cat && mealPickFor.i === i;
+          const chip = el("div", { class: "preset draggable catalog macro-" + macroOf(p),
+            onClick: () => { mealPickFor = open ? null : { cat, i }; render(); } },
             el("div", { class: "pbody" },
               el("span", { class: "pn" }, p.n),
               el("span", { class: "pmacros" },
@@ -1023,42 +1068,28 @@
                 el("span", { class: "pmac" }, "F " + Math.round(p.f * q)),
                 el("span", { class: "pmac" }, "Fb " + Math.round((p.fi || 0) * q))
               )
-            )
+            ),
+            el("button", { class: "pdel", title: "Delete from catalog",
+              onClick: (e) => { e.stopPropagation();
+                if (confirm(`Delete "${p.n}" from your catalog?`)) deleteCatalogFood(cat, i);
+              } }, "×")
           );
-          makeDraggable(btn, slot, i, foodDragCtx);
-          grid.appendChild(btn);
+          makeDraggable(chip, cat, i, foodDragCtx);
+          grid.appendChild(chip);
+          if (open) {
+            grid.appendChild(el("div", { class: "mealMenu" },
+              el("div", { class: "mealMenuHdr" }, "Add to…"),
+              MEALS.map((meal) => el("button", { class: "mealOpt",
+                onClick: (e) => { e.stopPropagation(); planFood(meal, p); } }, meal))
+            ));
+          }
         });
-        if (!grid.children.length) grid.appendChild(el("div", { class: "dropHint" }, "Drop here"));
+        if (!list.length) grid.appendChild(el("div", { class: "dropHint" }, "No foods yet"));
         wrap.appendChild(grid);
       });
-    } else if (tab === "remove") {
-      // Removal interface: every food shows an × that deletes it from this day
-      // onward (earlier days keep it). No tap-to-log, qty editing, or reordering.
-      let any = false;
-      SLOTS.forEach((slot) => {
-        const visible = (foods[slot] || []).filter((p) => !isHidden(p));
-        if (!visible.length) return;
-        any = true;
-        wrap.appendChild(el("div", { class: "slotTitle" }, slot));
-        const grid = el("div", { class: "presets", "data-slot": slot });
-        visible.forEach((p) => {
-          grid.appendChild(
-            el("div", { class: "preset removing" },
-              el("div", { class: "pbody" },
-                el("span", { class: "pn" }, p.n),
-                el("span", { class: "pc" }, String(p.c))
-              ),
-              el("button", { class: "pdel", title: "Delete from here on",
-                onClick: () => {
-                  if (confirm(`Delete "${p.n}" from this day onward? Earlier days keep it.`)) deleteFood(slot, p);
-                } }, "×")
-            )
-          );
-        });
-        wrap.appendChild(grid);
-      });
-      if (!any) wrap.appendChild(el("div", { class: "empty" }, "No foods to remove."));
     } else {
+      // New-food form: creates a catalog entry (name + macros + category). Unlike
+      // before, this only adds to the catalog — it isn't auto-logged to the day.
       const cn = el("input", { class: "ci", placeholder: "Food name" });
       const cbase = el("input", { class: "ci", inputmode: "decimal", placeholder: "macros are per… (e.g. 50)" });
       const cc = el("input", { class: "ci", inputmode: "decimal", placeholder: "cal" });
@@ -1068,11 +1099,12 @@
       const cfi = el("input", { class: "ci", inputmode: "decimal", placeholder: "fiber" });
       const cdef = el("input", { class: "ci", inputmode: "decimal", placeholder: "default amount (e.g. 200)" });
       const cs = el("select", { class: "ci", onChange: (e) => { lastSlot = e.target.value; } });
-      SLOTS.forEach((s) => {
+      CATEGORIES.forEach((s) => {
         const opt = el("option", { value: s }, s);
         if (s === lastSlot) opt.selected = true;
         cs.appendChild(opt);
       });
+      wrap.appendChild(el("div", { class: "slotTitle" }, "New food"));
       wrap.appendChild(
         el("div", { class: "customBox" },
           cn,
@@ -1081,25 +1113,28 @@
           el("div", { class: "crow" }, ccb, cf),
           cfi,
           cdef,
+          el("div", { class: "edLabel", style: "margin-top:4px" }, "Category"),
           cs,
-          el("button", { class: "addBtn", onClick: () => {
-            const name = cn.value.trim();
-            if (!name) return;
-            // Macros are entered per `base` units; `def` is the default amount to
-            // log. The food's default multiplier is def/base (e.g. 200/50 = 4×).
-            const base = +cbase.value || 1;
-            const def = +cdef.value || base;
-            const food = { n: name, c: +cc.value || 0, p: +cp.value || 0, cb: +ccb.value || 0, f: +cf.value || 0,
-              fi: +cfi.value || 0, b: base, q: Math.round((def / base) * 1000) / 1000 };
-            addItem({ ...food, s: lastSlot });
-            // Also save to Quick add for this slot, skipping exact duplicates.
-            const slotFoods = foods[lastSlot] = foods[lastSlot] || [];
-            if (!slotFoods.some((q) => !q.to && q.n === food.n && q.c === food.c && q.p === food.p && q.cb === food.cb && q.f === food.f && (q.fi || 0) === food.fi && (q.b || 1) === food.b)) {
-              slotFoods.push(food);
-              saveFoods(); // persists locally + syncs to the cloud via Store
-            }
-            tab = "quick"; render();
-          } }, "Add food")
+          el("div", { class: "crow" },
+            el("button", { class: "tool", onClick: () => { tab = "catalog"; render(); } }, "Cancel"),
+            el("button", { class: "addBtn", style: "margin-top:0", onClick: () => {
+              const name = cn.value.trim();
+              if (!name) return;
+              // Macros are entered per `base` units; `def` is the default amount a
+              // serving logs. The food's default multiplier is def/base.
+              const base = +cbase.value || 1;
+              const def = +cdef.value || base;
+              const food = { n: name, c: +cc.value || 0, p: +cp.value || 0, cb: +ccb.value || 0, f: +cf.value || 0,
+                fi: +cfi.value || 0, b: base, q: Math.round((def / base) * 1000) / 1000 };
+              const cat = CATEGORIES.indexOf(lastSlot) >= 0 ? lastSlot : CATEGORIES[0];
+              const catFoods = foods[cat] = foods[cat] || [];
+              if (!catFoods.some((x) => x.n === food.n && x.c === food.c && x.p === food.p && x.cb === food.cb && x.f === food.f && (x.fi || 0) === food.fi && (x.b || 1) === food.b)) {
+                catFoods.push(food);
+                saveFoods(); // persists locally + syncs to the cloud via Store
+              }
+              tab = "catalog"; render();
+            } }, "Add to catalog")
+          )
         )
       );
     }
