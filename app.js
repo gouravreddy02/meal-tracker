@@ -1016,10 +1016,10 @@
     } else {
       const cn = el("input", { class: "ci", placeholder: "Food name" });
       const cbase = el("input", { class: "ci", inputmode: "decimal", placeholder: "macros are per… (e.g. 50)" });
-      const cc = el("input", { class: "ci", inputmode: "numeric", placeholder: "cal" });
-      const cp = el("input", { class: "ci", inputmode: "numeric", placeholder: "protein" });
-      const ccb = el("input", { class: "ci", inputmode: "numeric", placeholder: "carbs" });
-      const cf = el("input", { class: "ci", inputmode: "numeric", placeholder: "fat" });
+      const cc = el("input", { class: "ci", inputmode: "decimal", placeholder: "cal" });
+      const cp = el("input", { class: "ci", inputmode: "decimal", placeholder: "protein" });
+      const ccb = el("input", { class: "ci", inputmode: "decimal", placeholder: "carbs" });
+      const cf = el("input", { class: "ci", inputmode: "decimal", placeholder: "fat" });
       const cdef = el("input", { class: "ci", inputmode: "decimal", placeholder: "default amount (e.g. 200)" });
       const cs = el("select", { class: "ci", onChange: (e) => { lastSlot = e.target.value; } });
       SLOTS.forEach((s) => {
