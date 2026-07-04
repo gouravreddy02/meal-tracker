@@ -362,7 +362,6 @@
     kids.flat().forEach((c) => e.appendChild(typeof c === "string" ? document.createTextNode(c) : c));
     return e;
   }
-  const pct = (v, t) => Math.min(100, Math.round((v / t) * 100));
 
   // ---- drag & drop (press-and-hold to reorder / move across sections) ----
   // Generic engine shared by the log (vertical lists) and Quick add (wrap
@@ -927,28 +926,55 @@
 
     // totals card
     const card = el("div", { class: "card" });
-    const topRow = el("div", { class: "totalsTop" },
-      el("div", null,
-        el("div", { class: "bigcal" }, Math.round(tt.c).toLocaleString()),
-        el("div", { class: "sub" }, `of ${T.cal.toLocaleString()} cal · ${Math.max(0, T.cal - Math.round(tt.c)).toLocaleString()} left`)
-      ),
-      el("div", { class: "weightBox" },
-        el("div", { class: "wlabel" }, "Weight"),
+    const wInput = (function () {
+      const w = weights[selected];
+      const shown = w === "" || w == null ? "" : fmtW(toDisplay(w));
+      return el("input", { class: "winput", inputmode: "decimal", placeholder: "—",
+        value: shown, onInput: (e) => setWeight(e.target.value) });
+    })();
+    const topRow = el("div", { class: "topTiles" },
+      (function () {
+        const now = Math.round(tt.c);
+        const ratio = T.cal > 0 ? tt.c / T.cal : 0;
+        const overAmt = Math.max(0, now - T.cal);
+        return el("div", { class: "topTile" },
+          el("div", { class: "topLabel" }, "Calories"),
+          el("div", { class: "calLine" },
+            el("span", { class: "calNow" }, now.toLocaleString()),
+            el("span", { class: "calTgt" }, " / " + T.cal.toLocaleString())
+          ),
+          el("div", { class: "calBarRow" },
+            el("div", { class: "calTrack" },
+              el("div", { class: "calFill" + (ratio > 1 ? " over" : ""), style: `width:${Math.min(100, Math.round(ratio * 100))}%` })),
+            el("div", { class: "calPct" }, Math.round(ratio * 100) + "%")
+          ),
+          el("div", { class: "sub" }, overAmt > 0
+            ? `${overAmt.toLocaleString()} over`
+            : `${Math.max(0, T.cal - now).toLocaleString()} left`)
+        );
+      })(),
+      el("div", { class: "topTile" },
+        el("img", { class: "wImg", src: "images/image_2.png", alt: "" }),
+        el("div", { class: "topLabel" }, "Weight"),
+        el("div", { class: "wRow" }, wInput,
+          el("button", { class: "wunit", title: "Tap to switch units", onClick: toggleUnit }, unit)),
         (function () {
-          const w = weights[selected];
-          const shown = w === "" || w == null ? "" : fmtW(toDisplay(w));
-          const inp = el("input", { class: "winput", inputmode: "decimal", placeholder: "—",
-            value: shown, onInput: (e) => setWeight(e.target.value) });
-          return inp;
-        })(),
-        el("button", { class: "wunit", title: "Tap to switch units", onClick: toggleUnit }, unit)
+          const vals = weekDates(wk).map((d) => weights[keyFor(d)])
+            .filter((v) => typeof v === "number" && v > 0).map(toDisplay);
+          if (vals.length < 2) return el("div", { class: "sub wHint" }, "Log each morning");
+          const delta = vals[vals.length - 1] - vals[0];
+          const arrow = delta > 0.05 ? "▲" : delta < -0.05 ? "▼" : "–";
+          return el("div", { class: "sub wDelta" }, `${arrow} ${fmtW(Math.abs(delta))} ${unit} this week`);
+        })()
       )
     );
     card.appendChild(topRow);
-    card.appendChild(macroBar("Protein", tt.p, T.protein, "var(--lime)"));
-    card.appendChild(macroBar("Carbs", tt.cb, T.carbs, "var(--blue)"));
-    card.appendChild(macroBar("Fat", tt.f, T.fat, "var(--orange)"));
-    card.appendChild(macroBar("Fiber", tt.fi, T.fiber, "var(--teal)"));
+    card.appendChild(el("div", { class: "macroScroll" },
+      macroRing("Protein", tt.p, T.protein, RING.protein),
+      macroRing("Carbs", tt.cb, T.carbs, RING.carbs),
+      macroRing("Fat", tt.f, T.fat, RING.fat),
+      macroRing("Fiber", tt.fi, T.fiber, RING.fiber)
+    ));
     wrap.appendChild(card);
 
     // tabs
@@ -1081,14 +1107,48 @@
     root.appendChild(wrap);
   }
 
-  function macroBar(label, val, target, color) {
-    return el("div", { class: "mb" },
-      el("div", { class: "mbtop" },
-        el("span", { class: "mblabel" }, label),
-        el("span", { class: "mbval" }, `${Math.round(val)} `, el("span", { class: "muted" }, `/ ${target}`))
-      ),
-      el("div", { class: "track" }, el("div", { class: "fill", style: `width:${pct(val, target)}%;background:${color}` }))
-    );
+  // One macro as a circular progress ring inside its own tile. The SVG ring is
+  // built as markup (SVG needs a namespace `el()` can't set); the centred value
+  // is overlaid with plain DOM so it can use the CSS variables/fonts.
+  // Dark→bright colour stops per macro, so each ring gets an Apple-style angular
+  // gradient (deep at the tail, vivid at the tip) instead of a flat colour.
+  const RING = {
+    protein: ["#7ea82f", "#d6ff5c"],
+    carbs:   ["#2a9bd4", "#9ae2ff"],
+    fat:     ["#d96a3a", "#ffb98c"],
+    fiber:   ["#1f9e7d", "#6bf0cf"],
+  };
+  // A macro as an Apple activity-style ring: a conic-gradient donut that fills to
+  // the target, then laps a second time when over — with a rounded, shadowed tip
+  // marking the leading end (the shadow reads as the lap overlapping itself).
+  const D = 76, TW = 9, RC = (D - TW) / 2, CEN = D / 2; // px geometry of one ring
+  function macroRing(label, val, target, stops) {
+    const [c0, c1] = stops;
+    const ratio = target > 0 ? val / target : 0;
+    const base = Math.min(1, ratio);                 // fill up to the target
+    const over = Math.max(0, Math.min(1, ratio - 1)); // excess, drawn as a 2nd lap
+    const isOver = ratio > 1;
+    const ring = el("div", { class: "ring" }, el("div", { class: "ringTrack" }));
+    // one conic layer per lap (from 12 o'clock, clockwise). Lap 1 runs dark→bright;
+    // the overflow lap starts from the bright shade so the colour carries straight
+    // over instead of resetting to dark at the top.
+    const layer = (frac, from, cls) => el("div", { class: "ringFill" + (cls || ""),
+      style: `background:conic-gradient(from 0deg,${from} 0deg,${c1} ${(frac * 360).toFixed(1)}deg,transparent ${(frac * 360).toFixed(1)}deg)` });
+    ring.appendChild(layer(base, c0, ""));
+    if (isOver) ring.appendChild(layer(over, c1, " ringOverFill"));
+    // rounded bright cap at the leading tip (position from trig; -90° = top)
+    if (ratio > 0) {
+      const tf = isOver ? over : base;
+      const a = (-90 + tf * 360) * Math.PI / 180;
+      const tx = CEN + RC * Math.cos(a), ty = CEN + RC * Math.sin(a);
+      ring.appendChild(el("div", { class: "ringTip" + (isOver ? " over" : ""),
+        style: `left:${tx.toFixed(1)}px;top:${ty.toFixed(1)}px;width:${TW}px;height:${TW}px;background:${c1}` }));
+    }
+    ring.appendChild(el("div", { class: "ringText" },
+      el("div", { class: "ringVal" }, String(Math.round(val))),
+      el("div", { class: "ringTgt" }, "/ " + target)
+    ));
+    return el("div", { class: "macroTile" }, ring, el("div", { class: "macroTileLabel" }, label));
   }
 
   // Turn a Firebase auth error into a readable message.

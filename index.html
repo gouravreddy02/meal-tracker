@@ -130,24 +130,60 @@
     .phasePill.on { background:var(--phase, var(--lime)); color:var(--ink); border-color:var(--phase, var(--lime)); }
 
     .card { background:var(--panel); border-radius:18px; padding:18px; border:1px solid var(--line); margin-bottom:16px; }
-    .totalsTop { display:flex; align-items:baseline; justify-content:space-between; margin-bottom:14px; }
-    .bigcal { font-size:38px; font-weight:800; line-height:1; letter-spacing:-1.5px; }
-    .weightBox { text-align:right; }
-    .wlabel { font-size:11px; color:var(--mute); text-transform:uppercase; letter-spacing:1px; }
-    .winput { width:72px; margin-top:3px; background:var(--ink); border:1px solid var(--line); color:var(--lime);
-      font-size:18px; font-weight:700; border-radius:10px; padding:6px 8px; text-align:right; outline:none; }
-    .wunit { font-size:12px; color:var(--mute); margin-left:4px; background:none; border:none;
-      cursor:pointer; padding:2px 4px; border-radius:6px; text-decoration:underline dotted;
+    /* top of the totals card: two tiles — calories (one line) + weight */
+    .topTiles { display:flex; gap:10px; margin-bottom:14px; }
+    .topTile { flex:1; min-width:0; position:relative; overflow:hidden; background:var(--ink);
+      border:1px solid var(--line); border-radius:14px; padding:12px 14px; }
+    .wImg { position:absolute; right:-12px; top:0; bottom:0; height:100%; width:auto;
+      object-fit:contain; object-position:right bottom; pointer-events:none; user-select:none; }
+    .topLabel { font-size:11px; letter-spacing:1px; text-transform:uppercase; color:var(--mute);
+      font-weight:700; margin-bottom:7px; }
+    .calLine { display:flex; align-items:baseline; white-space:nowrap; }
+    .calNow { font-size:25px; font-weight:800; letter-spacing:-1px; line-height:1; }
+    .calTgt { font-size:14px; color:var(--mute); font-weight:700; margin-left:2px; }
+    .calBarRow { display:flex; align-items:center; gap:8px; margin-top:9px; }
+    .calTrack { flex:1; height:7px; background:var(--line); border-radius:6px; overflow:hidden; }
+    .calFill { height:100%; border-radius:6px; background:var(--lime); transition:width .3s; }
+    .calFill.over { background:linear-gradient(90deg,#7ea82f,#d6ff5c); }
+    .calPct { font-size:11px; font-weight:700; color:var(--mute); font-variant-numeric:tabular-nums; }
+    .topTile .sub { margin-top:6px; }
+    .wRow { display:flex; align-items:baseline; gap:6px; }
+    .wDelta { margin-top:9px; }
+    .wHint { margin-top:9px; }
+    .winput { width:78px; background:var(--panel); border:1px solid var(--line); color:var(--lime);
+      font-size:25px; font-weight:800; letter-spacing:-1px; border-radius:10px; padding:2px 8px;
+      text-align:left; outline:none; }
+    .wunit { font-size:13px; color:var(--mute); background:none; border:none; cursor:pointer;
+      padding:2px 4px; border-radius:6px; text-decoration:underline dotted;
       text-underline-offset:2px; font:inherit; }
     .wunit:active { color:var(--lime); }
 
-    .mb { margin-bottom:10px; }
-    .mbtop { display:flex; justify-content:space-between; font-size:12px; color:var(--mute); margin-bottom:4px; }
-    .mblabel { letter-spacing:.5px; text-transform:uppercase; font-weight:600; }
-    .mbval { color:#fff; font-variant-numeric:tabular-nums; }
     .muted { color:var(--mute); }
-    .track { height:7px; background:var(--line); border-radius:6px; overflow:hidden; }
-    .fill { height:100%; border-radius:6px; transition:width .3s; }
+
+    /* circular macro rings — one per tile, horizontally scrollable (3 in view) */
+    .macroScroll { display:flex; gap:10px; overflow-x:auto; scroll-snap-type:x mandatory;
+      margin:2px -2px 0; padding:2px; -webkit-overflow-scrolling:touch; }
+    .macroScroll::-webkit-scrollbar { height:0; }
+    .macroTile { flex:0 0 calc((100% - 20px) / 3); scroll-snap-align:start;
+      background:var(--ink); border:1px solid var(--line); border-radius:14px;
+      padding:12px 6px 11px; display:flex; flex-direction:column; align-items:center; gap:8px; }
+    .ring { position:relative; width:76px; height:76px; }
+    /* donut: a full disc masked to a 9px-thick band at the outer edge */
+    .ringTrack, .ringFill { position:absolute; inset:0; border-radius:50%;
+      -webkit-mask:radial-gradient(farthest-side, transparent calc(100% - 9px), #000 calc(100% - 9px));
+              mask:radial-gradient(farthest-side, transparent calc(100% - 9px), #000 calc(100% - 9px)); }
+    .ringTrack { background:var(--line); }
+    /* rounded bright cap at the leading tip; its shadow reads as the lap overlap */
+    .ringTip { position:absolute; border-radius:50%; transform:translate(-50%,-50%);
+      filter:drop-shadow(0 1px 1.5px rgba(0,0,0,.35)); }
+    .ringTip.over { filter:drop-shadow(0 1.5px 3px rgba(0,0,0,.7)); }
+    .ringText { position:absolute; inset:0; display:flex; flex-direction:column;
+      align-items:center; justify-content:center; }
+    .ringVal { font-size:18px; font-weight:800; line-height:1; letter-spacing:-0.5px;
+      font-variant-numeric:tabular-nums; }
+    .ringTgt { font-size:10px; color:var(--mute); margin-top:2px; }
+    .macroTileLabel { font-size:11px; letter-spacing:1px; text-transform:uppercase;
+      color:var(--mute); font-weight:700; }
 
     .list { margin-bottom:16px; }
     .empty { color:var(--mute); font-size:14px; text-align:center; padding:18px 0; }

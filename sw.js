@@ -1,5 +1,5 @@
 // sw.js — caches the app shell so it works offline once loaded.
-const CACHE = "mealtracker-v16";
+const CACHE = "mealtracker-v29";
 const ASSETS = [
   ".",
   "index.html",
@@ -8,6 +8,7 @@ const ASSETS = [
   "app.js",
   "manifest.json",
   "icon.svg",
+  "images/image_2.png",
 ];
 
 self.addEventListener("install", (e) => {
