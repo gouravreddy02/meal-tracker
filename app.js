@@ -879,7 +879,8 @@
       el("div", { class: "sub" }, "Export your data to a file, or restore it from one."),
       el("div", { class: "tools", style: "margin-top:14px" },
         el("button", { class: "tool", onClick: exportData }, "Export backup"),
-        el("button", { class: "tool", onClick: importData }, "Import backup")
+        el("button", { class: "tool", onClick: importData }, "Import backup"),
+        el("button", { class: "tool", onClick: exportCsv }, "Export Excel (CSV)")
       )
     );
     wrap.appendChild(backup);
@@ -1254,6 +1255,54 @@
     a.click();
     URL.revokeObjectURL(url);
   }
+  // Export every logged day as a CSV that Excel/Sheets opens directly: one row per
+  // journal item (effective macros = stored × q), grouped by day and meal, with a
+  // per-day total row summing only *eaten* items (matching the app's `totals()`).
+  function exportCsv() {
+    const esc = (v) => {
+      const s = String(v == null ? "" : v);
+      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    };
+    const round = (n) => Math.round(n * 10) / 10;
+    const rows = [[
+      "Date", "Meal", "Food", "Amount", "Unit", "Eaten",
+      "Calories", "Protein (g)", "Carbs (g)", "Fat (g)", "Fiber (g)", "Sugar (g)",
+    ]];
+    const dates = Object.keys(logs).filter((k) => (logs[k] || []).length).sort();
+    dates.forEach((date) => {
+      const items = (logs[date] || []).slice()
+        .sort((a, b) => MEALS.indexOf(mealOf(a)) - MEALS.indexOf(mealOf(b)));
+      const tot = { c: 0, p: 0, cb: 0, f: 0, fi: 0, sg: 0 };
+      items.forEach((it) => {
+        const q = it.q || 1;
+        const eaten = isEaten(it);
+        if (eaten) {
+          tot.c += it.c * q; tot.p += it.p * q; tot.cb += it.cb * q;
+          tot.f += it.f * q; tot.fi += (it.fi || 0) * q; tot.sg += (it.sg || 0) * q;
+        }
+        rows.push([
+          date, mealOf(it), it.n, fmtQ(q * (it.b || 1)), it.u || "", eaten ? "yes" : "no",
+          Math.round(it.c * q), round(it.p * q), round(it.cb * q),
+          round(it.f * q), round((it.fi || 0) * q), round((it.sg || 0) * q),
+        ]);
+      });
+      rows.push([
+        date, "", "Day total (eaten)", "", "", "",
+        Math.round(tot.c), round(tot.p), round(tot.cb), round(tot.f), round(tot.fi), round(tot.sg),
+      ]);
+      rows.push([]); // blank row between days
+    });
+    const csv = rows.map((r) => r.map(esc).join(",")).join("\r\n");
+    // ﻿ BOM so Excel reads it as UTF-8.
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `meal-log-${keyFor(new Date())}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   function importData() {
     const input = document.createElement("input");
     input.type = "file";
