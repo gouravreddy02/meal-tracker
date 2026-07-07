@@ -65,6 +65,14 @@
   const catColor = (cat) => catColors[cat] || CAT_COLOR[cat] || "var(--line)";
   // A concrete hex for <input type=color> (never a CSS var).
   const catColorHex = (cat) => catColors[cat] || CAT_COLOR[cat] || DEFAULT_CAT_COLOR;
+  // Category for a journal item, derived live so old logs colour correctly too:
+  // its snapshotted category (`k`) if it has one, else the current catalog category
+  // of a food with the same name, else its dominant-macro category.
+  function foodCatByName(name) {
+    for (const cat of CATEGORIES) if ((foods[cat] || []).some((f) => f.n === name)) return cat;
+    return null;
+  }
+  const catOf = (it) => it.k || foodCatByName(it.n) || catForMacro(macroOf(it));
 
   // ---- diet weeks ----
   // The plan is a flat, ordered list of weeks. Each week spans 7 consecutive days
@@ -267,25 +275,6 @@
     CATEGORIES = base.concat(extra);
   }
   syncCategories();
-  // One-time backfill: give pre-existing journal items a category (`k`) so they
-  // pick up the category colour too. Prefer the catalog entry with the same name;
-  // otherwise fall back to the dominant-macro category.
-  function backfillLogCategories() {
-    const byName = {};
-    CATEGORIES.forEach((cat) => (foods[cat] || []).forEach((f) => {
-      if (!(f.n in byName)) byName[f.n] = cat;
-    }));
-    let changed = false;
-    Object.keys(logs).forEach((date) => {
-      (logs[date] || []).forEach((it) => {
-        if (it.k) return;
-        it.k = byName[it.n] || catForMacro(macroOf(it));
-        changed = true;
-      });
-    });
-    if (changed) saveLogs();
-  }
-  backfillLogCategories();
   let selected = todayOrFirst(weekDates(activeWeek()));
   let tab = "log"; // log (journal) | catalog | newfood (create form)
   let editQty = null; // index of the journal item whose qty box is being edited
@@ -306,9 +295,8 @@
   let localOnly = false; // user chose to skip login and use this device only
 
   // Cloud sync: when the Store pulls remote data, reload our state and re-render.
-  // Re-run the same normalisation as first load (fold legacy meal groups, refresh
-  // categories, backfill journal categories) so pulled-in data that predates the
-  // category field still gets its colours — otherwise a sync would wipe them.
+  // Re-run the catalog normalisation (fold legacy meal groups, refresh categories)
+  // so pulled-in data is consistent; journal colours derive live via catOf().
   window.Store.onSync(() => {
     logs = window.Store.getLogs();
     weights = window.Store.getWeights();
@@ -317,7 +305,6 @@
     catColors = window.Store.getCatColors() || {};
     cleanupLegacyMealFoods();
     syncCategories();
-    backfillLogCategories();
     if (!weeks.some((w) => w.id === activeWeekId)) activeWeekId = weeks[weeks.length - 1].id;
     selected = todayOrFirst(weekDates(activeWeek()));
     unit = window.Store.getUnit();
@@ -1220,7 +1207,7 @@
           }
           grid.appendChild(
             el("div", { class: "preset " + (eaten ? "eaten macro-" + macroOf(it) : "planned"),
-              style: it.k ? "--macro:" + catColor(it.k) : "",
+              style: "--macro:" + catColor(catOf(it)),
               onClick: () => toggleEaten(idx) },
               qtyEl,
               el("div", { class: "pbody" },
