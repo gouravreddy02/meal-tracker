@@ -306,11 +306,18 @@
   let localOnly = false; // user chose to skip login and use this device only
 
   // Cloud sync: when the Store pulls remote data, reload our state and re-render.
+  // Re-run the same normalisation as first load (fold legacy meal groups, refresh
+  // categories, backfill journal categories) so pulled-in data that predates the
+  // category field still gets its colours — otherwise a sync would wipe them.
   window.Store.onSync(() => {
     logs = window.Store.getLogs();
     weights = window.Store.getWeights();
     foods = loadFoods();
     weeks = loadWeeks();
+    catColors = window.Store.getCatColors() || {};
+    cleanupLegacyMealFoods();
+    syncCategories();
+    backfillLogCategories();
     if (!weeks.some((w) => w.id === activeWeekId)) activeWeekId = weeks[weeks.length - 1].id;
     selected = todayOrFirst(weekDates(activeWeek()));
     unit = window.Store.getUnit();
