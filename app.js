@@ -21,7 +21,7 @@
   // Base categories seed from PLAN; user-created ones are merged in from the saved
   // catalog once it loads (see syncCategories). Mutable so new categories persist.
   let CATEGORIES = Object.keys(P.foods);
-  const MEALS = ["Before workout", "After workout", "Lunch", "Snacks", "Dinner"];
+  const MEALS = ["Before workout", "After workout", "Breakfast", "Lunch", "Snacks", "Dinner"];
   // Measurement units a food's macros can be quoted per (value stored on the food
   // as `u`; label shown in the New food picker). "serving" ≈ the old unit-less food.
   const UNITS = [
