@@ -208,7 +208,7 @@
       transform:scale(1.03); box-shadow:0 12px 28px rgba(0,0,0,.5); border-color:var(--lime); }
 
     .tabs { display:flex; gap:8px; margin-bottom:12px; }
-    .tab { flex:1; padding:9px 6px; border-radius:11px; cursor:pointer; font-size:12px; font-weight:700;
+    .tab { flex:1; padding:11px 6px; border-radius:11px; cursor:pointer; font-size:14px; font-weight:700;
       white-space:nowrap; background:var(--panel); color:#fff; border:1px solid var(--line); }
     .tab.active { background:var(--lime); color:var(--ink); border-color:var(--lime); }
 
@@ -218,14 +218,13 @@
 
     /* collapsible catalog category header (dropdown) */
     .catHdr { display:flex; align-items:center; justify-content:space-between; width:100%;
-      background:var(--panel); border:1px solid var(--line); border-radius:12px;
-      padding:12px 14px; margin:8px 0 0; cursor:pointer; }
+      background:var(--panel); border:1px solid var(--line); border-left:4px solid var(--cat, var(--line));
+      border-radius:12px; padding:12px 14px; margin:8px 0 0; cursor:pointer; }
     .catHdr:first-of-type { margin-top:4px; }
     .catHdr:active { background:var(--ink); }
     .catHdr.open { border-radius:12px 12px 0 0; }
     .catHdrName { font-size:11px; letter-spacing:2px; text-transform:uppercase;
-      font-weight:700; color:var(--mute); }
-    .catHdr.open .catHdrName { color:#fff; }
+      font-weight:700; color:var(--cat, var(--mute)); }
     .catHdrRight { display:flex; align-items:center; gap:11px; }
     .catCount { font-size:12px; font-weight:700; color:var(--mute); background:var(--ink);
       border:1px solid var(--line); border-radius:20px; padding:1px 9px; min-width:24px; text-align:center; }
@@ -286,6 +285,12 @@
       border-radius:10px; padding:10px 12px; font-size:14px; outline:none; margin-bottom:8px; }
     .crow { display:flex; gap:8px; }
     .crow .ci { margin-bottom:8px; }
+    .ccolor { flex:0 0 46px; align-self:stretch; padding:3px; border:1px solid var(--line);
+      border-radius:10px; background:var(--ink); cursor:pointer; }
+    .ccolor::-webkit-color-swatch-wrapper { padding:0; }
+    .ccolor::-webkit-color-swatch { border:none; border-radius:6px; }
+    .ccolor::-moz-color-swatch { border:none; border-radius:6px; }
+    .catHdrColor { flex:0 0 26px; width:26px; height:26px; align-self:center; padding:2px; }
     .addBtn { margin-top:2px; width:100%; background:var(--lime); color:var(--ink); border:none;
       border-radius:11px; padding:11px; font-size:14px; font-weight:700; cursor:pointer; }
 

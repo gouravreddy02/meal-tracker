@@ -18,7 +18,9 @@
   //  • CATEGORIES — the catalog's macro groups (config-driven, from PLAN.foods).
   //  • MEALS      — how the day's journal is grouped; a journal item carries its
   //    meal in `s`. A catalog food is planned into one of these meals.
-  const CATEGORIES = Object.keys(P.foods);
+  // Base categories seed from PLAN; user-created ones are merged in from the saved
+  // catalog once it loads (see syncCategories). Mutable so new categories persist.
+  let CATEGORIES = Object.keys(P.foods);
   const MEALS = ["Before workout", "After workout", "Lunch", "Snacks", "Dinner"];
   // Measurement units a food's macros can be quoted per (value stored on the food
   // as `u`; label shown in the New food picker). "serving" ≈ the old unit-less food.
@@ -46,6 +48,23 @@
   }
   // Category a food lands in when auto-sorted by its dominant macro.
   const catForMacro = (m) => (m === "protein" ? "Protein" : m === "carbs" ? "Carbs" : "Fat");
+  // A distinct accent colour per catalog category (header stripe + chip stripe).
+  // User-created categories aren't listed and fall back to the neutral line colour.
+  const CAT_COLOR = {
+    Protein: "#7ed957",     // green
+    Carbs: "#b07a3f",       // brown
+    Fruit: "#ffd23f",       // yellow
+    Vegetables: "#3fc9a0",  // green (distinct from protein)
+    Fat: "#ff9d6a",         // orange
+    Snacks: "#ff5d6c",      // red
+  };
+  // User-chosen colour overrides (per category), persisted via Store; falls back
+  // to the built-in defaults above, then to the neutral line colour.
+  let catColors = window.Store.getCatColors() || {};
+  const DEFAULT_CAT_COLOR = "#7ed957";
+  const catColor = (cat) => catColors[cat] || CAT_COLOR[cat] || "var(--line)";
+  // A concrete hex for <input type=color> (never a CSS var).
+  const catColorHex = (cat) => catColors[cat] || CAT_COLOR[cat] || DEFAULT_CAT_COLOR;
 
   // ---- diet weeks ----
   // The plan is a flat, ordered list of weeks. Each week spans 7 consecutive days
@@ -162,6 +181,8 @@
   let expandedId = null;  // week expanded in the Weeks list (inline editor)
   let showWeekAvg = false; // profile: weekly-average list collapsed by default
   let swipedWeekId = null; // week row slid open revealing its Delete action
+  let swipedFoodKey = null; // "<cat>:<idx>" of catalog food slid open (Edit/Remove)
+  let editFood = null;      // { cat, i } catalog food being edited in the New-food form
   // Land on the week containing today, else the most recent week.
   (function initActive() {
     activeWeekId = currentWeekId() || weeks[weeks.length - 1].id;
@@ -214,13 +235,70 @@
     return migrated;
   }
   let foods = loadFoods();
+  // One-time cleanup: fold any orphaned legacy meal-keyed groups (Before workout /
+  // Lunch / …) back into the real macro categories by dominant macro, then drop the
+  // meal keys. Skips exact duplicates so re-runs are harmless.
+  function cleanupLegacyMealFoods() {
+    let changed = false;
+    MEALS.forEach((meal) => {
+      const list = foods[meal];
+      if (!Array.isArray(list)) return;
+      list.forEach((f) => {
+        const { to, s, ...clean } = f; // strip legacy per-day delete/slot fields
+        const cat = catForMacro(macroOf(clean));
+        const dest = foods[cat] = foods[cat] || [];
+        const dup = dest.some((x) => x.n === clean.n && x.c === clean.c && x.p === clean.p
+          && x.cb === clean.cb && x.f === clean.f && (x.fi || 0) === (clean.fi || 0));
+        if (!dup) dest.push(clean);
+      });
+      delete foods[meal];
+      changed = true;
+    });
+    if (changed) saveFoods();
+  }
+  cleanupLegacyMealFoods();
+  // Merge any user-created categories (extra keys in the saved catalog) into
+  // CATEGORIES, keeping the base PLAN order first and appending custom ones.
+  // Legacy meal-keyed groups (Before workout / Lunch / …) are ignored — they're
+  // orphaned remnants of an old catalog shape, not real categories.
+  function syncCategories() {
+    const base = Object.keys(P.foods);
+    const extra = Object.keys(foods).filter((c) => base.indexOf(c) < 0 && MEALS.indexOf(c) < 0);
+    CATEGORIES = base.concat(extra);
+  }
+  syncCategories();
+  // One-time backfill: give pre-existing journal items a category (`k`) so they
+  // pick up the category colour too. Prefer the catalog entry with the same name;
+  // otherwise fall back to the dominant-macro category.
+  function backfillLogCategories() {
+    const byName = {};
+    CATEGORIES.forEach((cat) => (foods[cat] || []).forEach((f) => {
+      if (!(f.n in byName)) byName[f.n] = cat;
+    }));
+    let changed = false;
+    Object.keys(logs).forEach((date) => {
+      (logs[date] || []).forEach((it) => {
+        if (it.k) return;
+        it.k = byName[it.n] || catForMacro(macroOf(it));
+        changed = true;
+      });
+    });
+    if (changed) saveLogs();
+  }
+  backfillLogCategories();
   let selected = todayOrFirst(weekDates(activeWeek()));
   let tab = "log"; // log (journal) | catalog | newfood (create form)
   let editQty = null; // index of the journal item whose qty box is being edited
   let mealPickFor = null; // { cat, i } of the catalog food whose meal dropdown is open
   let catOpen = {}; // { <category>: true } — which catalog categories are expanded
+  let addingCat = false; // catalog: inline "new category" input row is showing
   // Quantity display: drop a trailing ".0" so whole numbers stay clean.
   const fmtQ = (n) => (Number.isInteger(n) ? String(n) : String(Math.round(n * 100) / 100));
+  // Macro display: round to 1 decimal, drop a trailing ".0" so whole numbers stay clean.
+  const fmtM = (n) => {
+    const r = Math.round(n * 10) / 10;
+    return Number.isInteger(r) ? String(r) : r.toFixed(1);
+  };
   let lastSlot = CATEGORIES[0]; // category a freshly-created food lands in
   let lastUnit = "g"; // measurement unit last chosen in the New food form
   let authMsg = "";      // transient cloud-sync status/error message
@@ -296,16 +374,18 @@
   // stored macros × multiplier `q`. The red box shows the *amount* the user thinks
   // in (q × b): servings for plan foods, or grams for custom foods whose macros
   // were entered per N units. `s` is the meal it sits in.
-  function snapItem(meal, p, q) {
-    return { n: p.n, c: p.c, p: p.p, cb: p.cb, f: p.f, fi: p.fi || 0, sg: p.sg || 0, s: meal, q, b: p.b || 1, u: p.u || "" };
+  function snapItem(meal, p, q, cat) {
+    const it = { n: p.n, c: p.c, p: p.p, cb: p.cb, f: p.f, fi: p.fi || 0, sg: p.sg || 0, s: meal, q, b: p.b || 1, u: p.u || "" };
+    if (cat) it.k = cat; // catalog category, so the journal chip keeps its colour
+    return it;
   }
   // Amount label for the red box: the amount (q × b) with its unit, e.g. "200 g".
   const amountLabel = (amt, u) => fmtQ(amt) + (u ? " " + u : "");
   // Plan a catalog food into a meal for the selected day. It lands greyed out
   // (eaten:false) and doesn't count toward totals until it's tapped to "eaten".
-  function planFood(meal, p) {
+  function planFood(meal, p, cat) {
     mealPickFor = null;
-    addItem({ ...snapItem(meal, p, p.q || 1), eaten: false });
+    addItem({ ...snapItem(meal, p, p.q || 1, cat), eaten: false });
   }
   // Tap a journal item to flip planned⇄eaten. Only eaten items count in totals().
   function toggleEaten(idx) {
@@ -359,6 +439,43 @@
     saveFoods();
     render();
   }
+  // Add a new (empty) catalog category, persist it, and expand it. De-dupes
+  // case-insensitively; if it already exists we just expand that one.
+  function addCategory(raw, color) {
+    const name = (raw || "").trim();
+    if (!name) return;
+    const existing = CATEGORIES.find((c) => c.toLowerCase() === name.toLowerCase());
+    if (!existing) {
+      foods[name] = foods[name] || [];
+      saveFoods();
+      syncCategories();
+    }
+    // Save the chosen accent colour for the category (new or existing).
+    if (color) {
+      catColors = { ...catColors, [existing || name]: color };
+      window.Store.setCatColors(catColors);
+    }
+    catOpen[existing || name] = true;
+    addingCat = false;
+    render();
+  }
+  // Recolour a category from its header swatch; persists the override.
+  function setCategoryColor(cat, color) {
+    if (!color) return;
+    catColors = { ...catColors, [cat]: color };
+    window.Store.setCatColors(catColors);
+    render();
+  }
+  // Open the New-food form pre-filled to edit an existing catalog food in place.
+  function openFoodEditor(cat, i) {
+    if (!foods[cat] || !foods[cat][i]) return;
+    editFood = { cat, i };
+    const f = foods[cat][i];
+    lastSlot = cat;
+    lastUnit = UNITS.some((x) => x.v === f.u) ? f.u : "g";
+    tab = "newfood";
+    render();
+  }
   let wT = null;
   function setWeight(val) {
     // Input is in the current display unit; store canonical kg (3 dp to avoid
@@ -395,12 +512,14 @@
   // grids). A ctx describes the DOM shape + how to commit a move:
   //   { bodySel, itemSel, grid, onBegin?, commit }
   // Works with touch and mouse via pointer events; no libraries.
-  const foodDragCtx = { bodySel: ".presets", itemSel: ".preset", grid: false,
+  // Catalog chips are wrapped in a `.swipeWrap` (for swipe-to-edit/remove), so the
+  // draggable unit is the wrapper, not the inner `.preset`.
+  const foodDragCtx = { bodySel: ".presets", itemSel: ".swipeWrap", grid: false,
     onBegin: null, commit: moveFood };
 
   function makeDraggable(card, slot, idx, ctx) {
     card.addEventListener("pointerdown", (e) => {
-      if (drag.active || e.target.closest(".x, .qty, .qinput, .pdel")) return; // ignore qty box + delete
+      if (drag.active || e.target.closest(".x, .qty, .qinput, .pdel, .swipeBtn")) return; // ignore qty box + delete + swipe actions
       const sx = e.clientX, sy = e.clientY;
       let holdT = setTimeout(() => { teardown(); beginDrag(card, slot, idx, ctx, sx, sy); }, 250);
       const onMove = (ev) => {
@@ -709,6 +828,52 @@
     };
     row.addEventListener("pointerup", end);
     row.addEventListener("pointercancel", end);
+  }
+
+  // Slide a catalog chip left to reveal its Edit & Remove buttons; mirrors
+  // makeWeekSwipe but keyed by "<cat>:<idx>" and yields to an active drag-reorder.
+  function makeFoodSwipe(front, key) {
+    const OPEN = -168, THRESH = 84;
+    let startX = 0, startY = 0, t = 0, active = false, decided = false;
+    front.style.transition = "transform .18s ease";
+    front.style.transform = swipedFoodKey === key ? `translateX(${OPEN}px)` : "translateX(0)";
+    front.addEventListener("pointerdown", (e) => {
+      if (drag.active) return;
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      startX = e.clientX; startY = e.clientY;
+      t = swipedFoodKey === key ? OPEN : 0;
+      active = true; decided = false;
+      front.style.transition = "none";
+    });
+    front.addEventListener("pointermove", (e) => {
+      if (!active || drag.active) { active = false; return; }
+      const mx = e.clientX - startX, my = e.clientY - startY;
+      if (!decided) {
+        if (Math.abs(mx) < 6 && Math.abs(my) < 6) return;
+        if (Math.abs(my) > Math.abs(mx)) { active = false; return; } // vertical → let it scroll
+        decided = true;
+        front.setPointerCapture(e.pointerId);
+      }
+      const base = swipedFoodKey === key ? OPEN : 0;
+      t = Math.max(OPEN, Math.min(0, base + mx));
+      front.style.transform = `translateX(${t}px)`;
+      e.preventDefault();
+    });
+    const end = () => {
+      if (!active) return;
+      active = false;
+      front.style.transition = "transform .18s ease";
+      const stayOpen = t < -THRESH;
+      swipedFoodKey = stayOpen ? key : (swipedFoodKey === key ? null : swipedFoodKey);
+      front.style.transform = `translateX(${stayOpen ? OPEN : 0}px)`;
+      if (decided) { // swallow the click that fires after a real swipe
+        const swallow = (ev) => { ev.stopPropagation(); ev.preventDefault(); };
+        window.addEventListener("click", swallow, { capture: true, once: true });
+        setTimeout(() => window.removeEventListener("click", swallow, { capture: true }), 0);
+      }
+    };
+    front.addEventListener("pointerup", end);
+    front.addEventListener("pointercancel", end);
   }
 
   // Letter shown inside the round profile button (signed-in email initial).
@@ -1048,17 +1213,18 @@
           }
           grid.appendChild(
             el("div", { class: "preset " + (eaten ? "eaten macro-" + macroOf(it) : "planned"),
+              style: it.k ? "--macro:" + catColor(it.k) : "",
               onClick: () => toggleEaten(idx) },
               qtyEl,
               el("div", { class: "pbody" },
                 el("span", { class: "pn" }, it.n),
                 el("span", { class: "pmacros" },
-                  el("span", { class: "pcal" }, Math.round(it.c * q) + " cal"),
-                  el("span", { class: "pmac" }, "P " + Math.round(it.p * q)),
-                  el("span", { class: "pmac" }, "C " + Math.round(it.cb * q)),
-                  el("span", { class: "pmac" }, "F " + Math.round(it.f * q)),
-                  el("span", { class: "pmac" }, "Fb " + Math.round((it.fi || 0) * q)),
-                  el("span", { class: "pmac" }, "Sug " + Math.round((it.sg || 0) * q))
+                  el("span", { class: "pcal" }, fmtM(it.c * q) + " cal"),
+                  el("span", { class: "pmac" }, "P " + fmtM(it.p * q)),
+                  el("span", { class: "pmac" }, "C " + fmtM(it.cb * q)),
+                  el("span", { class: "pmac" }, "F " + fmtM(it.f * q)),
+                  el("span", { class: "pmac" }, "Fb " + fmtM((it.fi || 0) * q)),
+                  el("span", { class: "pmac" }, "Sug " + fmtM((it.sg || 0) * q))
                 )
               ),
               el("button", { class: "pdel", title: "Remove from day",
@@ -1072,17 +1238,38 @@
     } else if (tab === "catalog") {
       // Master food library, grouped by macro category. Tap a food to open a meal
       // dropdown and drop it into the day's journal (as a planned item).
-      wrap.appendChild(el("button", { class: "addBtn", style: "margin-bottom:4px",
-        onClick: () => { tab = "newfood"; render(); } }, "+ New food"));
+      wrap.appendChild(el("div", { class: "crow", style: "margin-bottom:8px" },
+        el("button", { class: "addBtn", style: "margin-top:0;flex:1 1 0",
+          onClick: () => { addingCat = false; editFood = null; tab = "newfood"; render(); } }, "+ New food"),
+        el("button", { class: "addBtn", style: "margin-top:0;flex:1 1 0",
+          onClick: () => { addingCat = !addingCat; render(); } }, "+ New category")));
+      if (addingCat) {
+        // Left half: name input + a colour swatch; right half: Add + Cancel — so the
+        // tiles line up with the columns in the rows above.
+        const ccat = el("input", { class: "ci", placeholder: "New category name", style: "flex:1 1 0;margin-bottom:0" });
+        const ccolor = el("input", { type: "color", class: "ccolor", value: DEFAULT_CAT_COLOR, title: "Category colour" });
+        ccat.addEventListener("keydown", (e) => { if (e.key === "Enter") addCategory(ccat.value, ccolor.value); });
+        setTimeout(() => ccat.focus(), 0); // input is in the DOM by the next tick
+        wrap.appendChild(el("div", { class: "crow", style: "margin-bottom:8px" },
+          el("div", { class: "crow", style: "flex:1 1 0" }, ccat, ccolor),
+          el("div", { class: "crow", style: "flex:1 1 0" },
+            el("button", { class: "addBtn", style: "margin-top:0;flex:1 1 0", onClick: () => addCategory(ccat.value, ccolor.value) }, "Add"),
+            el("button", { class: "tool", style: "flex:1 1 0", onClick: () => { addingCat = false; render(); } }, "Cancel"))));
+      }
       CATEGORIES.forEach((cat) => {
         const list = foods[cat] || [];
         const open = !!catOpen[cat];
         // Tappable category header (dropdown): shows the item count + a chevron and
         // toggles its food list open/closed.
         wrap.appendChild(el("button", { class: "catHdr" + (open ? " open" : ""),
+          style: "--cat:" + catColor(cat),
           onClick: () => { catOpen[cat] = !open; render(); } },
           el("span", { class: "catHdrName" }, cat),
           el("span", { class: "catHdrRight" },
+            el("input", { type: "color", class: "ccolor catHdrColor", value: catColorHex(cat),
+              title: "Category colour",
+              onClick: (e) => e.stopPropagation(), // don't toggle the section
+              onChange: (e) => setCategoryColor(cat, e.target.value) }),
             el("span", { class: "catCount" }, String(list.length)),
             el("span", { class: "catChev" }, open ? "▾" : "▸"))
         ));
@@ -1091,32 +1278,41 @@
         list.forEach((p, i) => {
           const q = p.q || 1;
           const open = mealPickFor && mealPickFor.cat === cat && mealPickFor.i === i;
+          const key = cat + ":" + i;
+          // Swipe a chip left to reveal Edit & Remove actions behind it.
+          const editLayer = el("button", { class: "swipeBtn swipeEdit", title: "Edit food",
+            onClick: (e) => { e.stopPropagation(); swipedFoodKey = null; openFoodEditor(cat, i); } }, "Edit");
+          const delLayer = el("button", { class: "swipeBtn swipeDel", title: "Remove food",
+            onClick: (e) => { e.stopPropagation(); swipedFoodKey = null; deleteCatalogFood(cat, i); } }, "Remove");
           const chip = el("div", { class: "preset draggable catalog macro-" + macroOf(p),
-            onClick: () => { mealPickFor = open ? null : { cat, i }; render(); } },
+            style: "--macro:" + catColor(cat),
+            onClick: () => {
+              if (swipedFoodKey === key) { swipedFoodKey = null; render(); return; }
+              mealPickFor = open ? null : { cat, i }; render();
+            } },
             el("div", { class: "pbody" },
               el("span", { class: "pn" }, p.n,
                 p.u ? el("span", { class: "pserv" }, " · " + amountLabel(q * (p.b || 1), p.u)) : ""),
               el("span", { class: "pmacros" },
-                el("span", { class: "pcal" }, Math.round(p.c * q) + " cal"),
-                el("span", { class: "pmac" }, "P " + Math.round(p.p * q)),
-                el("span", { class: "pmac" }, "C " + Math.round(p.cb * q)),
-                el("span", { class: "pmac" }, "F " + Math.round(p.f * q)),
-                el("span", { class: "pmac" }, "Fb " + Math.round((p.fi || 0) * q)),
-                el("span", { class: "pmac" }, "Sug " + Math.round((p.sg || 0) * q))
+                el("span", { class: "pcal" }, fmtM(p.c * q) + " cal"),
+                el("span", { class: "pmac" }, "P " + fmtM(p.p * q)),
+                el("span", { class: "pmac" }, "C " + fmtM(p.cb * q)),
+                el("span", { class: "pmac" }, "F " + fmtM(p.f * q)),
+                el("span", { class: "pmac" }, "Fb " + fmtM((p.fi || 0) * q)),
+                el("span", { class: "pmac" }, "Sug " + fmtM((p.sg || 0) * q))
               )
-            ),
-            el("button", { class: "pdel", title: "Delete from catalog",
-              onClick: (e) => { e.stopPropagation();
-                if (confirm(`Delete "${p.n}" from your catalog?`)) deleteCatalogFood(cat, i);
-              } }, "×")
+            )
           );
-          makeDraggable(chip, cat, i, foodDragCtx);
-          grid.appendChild(chip);
+          const wrapEl = el("div", { class: "swipeWrap" },
+            el("div", { class: "swipeAct" }, editLayer, delLayer), chip);
+          makeDraggable(wrapEl, cat, i, foodDragCtx);
+          makeFoodSwipe(chip, key);
+          grid.appendChild(wrapEl);
           if (open) {
             grid.appendChild(el("div", { class: "mealMenu" },
               el("div", { class: "mealMenuHdr" }, "Add to…"),
               MEALS.map((meal) => el("button", { class: "mealOpt",
-                onClick: (e) => { e.stopPropagation(); planFood(meal, p); } }, meal))
+                onClick: (e) => { e.stopPropagation(); planFood(meal, p, cat); } }, meal))
             ));
           }
         });
@@ -1124,11 +1320,16 @@
         wrap.appendChild(grid);
       });
     } else {
-      // New-food form: creates a catalog entry (name + macros + category). Unlike
-      // before, this only adds to the catalog — it isn't auto-logged to the day.
-      const cn = el("input", { class: "ci", placeholder: "Food name" });
-      const cbase = el("input", { class: "ci", inputmode: "decimal", placeholder: "quantity (e.g. 100)" });
-      const cdef = el("input", { class: "ci", inputmode: "decimal", placeholder: `default to log in ${lastUnit} (e.g. 200)` });
+      // New-food form: creates a catalog entry (name + macros + category), or edits
+      // one in place when reached via a chip's swipe-left Edit action (`editFood`).
+      const ef = editFood && foods[editFood.cat] && foods[editFood.cat][editFood.i]
+        ? foods[editFood.cat][editFood.i] : null;
+      if (editFood && !ef) editFood = null; // stale target (deleted/reordered)
+      const cn = el("input", { class: "ci", placeholder: "Food name", value: ef ? ef.n : "" });
+      const cbase = el("input", { class: "ci", inputmode: "decimal", placeholder: "quantity (e.g. 100)",
+        value: ef ? fmtQ(ef.b || 1) : "" });
+      const cdef = el("input", { class: "ci", inputmode: "decimal", placeholder: `default to log in ${lastUnit} (e.g. 200)`,
+        value: ef ? fmtQ((ef.q || 1) * (ef.b || 1)) : "" });
       // Unit the macros are quoted per; changing it updates the default-amount hint.
       const cu = el("select", { class: "ci", onChange: (e) => {
         lastUnit = e.target.value;
@@ -1139,19 +1340,19 @@
         if (u.v === lastUnit) opt.selected = true;
         cu.appendChild(opt);
       });
-      const cc = el("input", { class: "ci", inputmode: "decimal", placeholder: "cal" });
-      const cp = el("input", { class: "ci", inputmode: "decimal", placeholder: "protein" });
-      const ccb = el("input", { class: "ci", inputmode: "decimal", placeholder: "carbs" });
-      const cf = el("input", { class: "ci", inputmode: "decimal", placeholder: "fat" });
-      const cfi = el("input", { class: "ci", inputmode: "decimal", placeholder: "fiber" });
-      const csg = el("input", { class: "ci", inputmode: "decimal", placeholder: "added sugar" });
+      const cc = el("input", { class: "ci", inputmode: "decimal", placeholder: "cal", value: ef ? fmtM(ef.c) : "" });
+      const cp = el("input", { class: "ci", inputmode: "decimal", placeholder: "protein", value: ef ? fmtM(ef.p) : "" });
+      const ccb = el("input", { class: "ci", inputmode: "decimal", placeholder: "carbs", value: ef ? fmtM(ef.cb) : "" });
+      const cf = el("input", { class: "ci", inputmode: "decimal", placeholder: "fat", value: ef ? fmtM(ef.f) : "" });
+      const cfi = el("input", { class: "ci", inputmode: "decimal", placeholder: "fiber", value: ef ? fmtM(ef.fi || 0) : "" });
+      const csg = el("input", { class: "ci", inputmode: "decimal", placeholder: "added sugar", value: ef ? fmtM(ef.sg || 0) : "" });
       const cs = el("select", { class: "ci", onChange: (e) => { lastSlot = e.target.value; } });
       CATEGORIES.forEach((s) => {
         const opt = el("option", { value: s }, s);
         if (s === lastSlot) opt.selected = true;
         cs.appendChild(opt);
       });
-      wrap.appendChild(el("div", { class: "slotTitle" }, "New food"));
+      wrap.appendChild(el("div", { class: "slotTitle" }, ef ? "Edit food" : "New food"));
       wrap.appendChild(
         el("div", { class: "customBox" },
           cn,
@@ -1165,7 +1366,7 @@
           el("div", { class: "edLabel" }, "Category"),
           cs,
           el("div", { class: "crow" },
-            el("button", { class: "tool", onClick: () => { tab = "catalog"; render(); } }, "Cancel"),
+            el("button", { class: "tool", onClick: () => { editFood = null; tab = "catalog"; render(); } }, "Cancel"),
             el("button", { class: "addBtn", style: "margin-top:0", onClick: () => {
               const name = cn.value.trim();
               if (!name) return;
@@ -1177,13 +1378,27 @@
               const food = { n: name, c: +cc.value || 0, p: +cp.value || 0, cb: +ccb.value || 0, f: +cf.value || 0,
                 fi: +cfi.value || 0, sg: +csg.value || 0, b: base, q: Math.round((def / base) * 1000) / 1000, u: unit };
               const cat = CATEGORIES.indexOf(lastSlot) >= 0 ? lastSlot : CATEGORIES[0];
+              if (ef) {
+                // Update in place; if the category changed, move it to the new one.
+                if (editFood.cat === cat) {
+                  foods[cat] = foods[cat].slice();
+                  foods[cat][editFood.i] = food;
+                } else {
+                  foods[editFood.cat] = foods[editFood.cat].slice();
+                  foods[editFood.cat].splice(editFood.i, 1);
+                  (foods[cat] = (foods[cat] || []).slice()).push(food);
+                }
+                saveFoods();
+                editFood = null; tab = "catalog"; render();
+                return;
+              }
               const catFoods = foods[cat] = foods[cat] || [];
               if (!catFoods.some((x) => x.n === food.n && x.c === food.c && x.p === food.p && x.cb === food.cb && x.f === food.f && (x.fi || 0) === food.fi && (x.sg || 0) === food.sg && (x.b || 1) === food.b && (x.u || "") === food.u)) {
                 catFoods.push(food);
                 saveFoods(); // persists locally + syncs to the cloud via Store
               }
               tab = "catalog"; render();
-            } }, "Add to catalog")
+            } }, ef ? "Save" : "Add to catalog")
           )
         )
       );
@@ -1231,7 +1446,7 @@
         style: `left:${tx.toFixed(1)}px;top:${ty.toFixed(1)}px;width:${TW}px;height:${TW}px;background:${c1}` }));
     }
     ring.appendChild(el("div", { class: "ringText" },
-      el("div", { class: "ringVal" }, String(Math.round(val))),
+      el("div", { class: "ringVal" }, fmtM(val)),
       el("div", { class: "ringTgt" }, "/ " + target)
     ));
     return el("div", { class: "macroTile" }, ring, el("div", { class: "macroTileLabel" }, label));

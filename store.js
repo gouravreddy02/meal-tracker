@@ -14,6 +14,7 @@ window.Store = (function () {
   const UNIT_KEY = "mealtracker.unit.v1";     // "kg" | "lb" — weight display unit (weights are always stored in kg)
   const CYCLES_KEY = "mealtracker.cycles.v1"; // [ { id, name, startDate, weeks, targets:{cal,protein,carbs,fat} }, ... ] — legacy diet cycles (read only, migrated into weeks)
   const WEEKS_KEY = "mealtracker.weeks.v1";   // [ { id, startDate, phase, targets:{cal,protein,carbs,fat} }, ... ] — diet weeks, oldest first; each spans 7 days
+  const CATCOLORS_KEY = "mealtracker.catcolors.v1"; // { "<category>": "#rrggbb" } — accent colour override per catalog category
   // Note: the Firebase SDK persists its own auth session; no local key needed.
 
   function read(key) {
@@ -71,6 +72,7 @@ window.Store = (function () {
       foods: (function () { const r = localStorage.getItem(FOODS_KEY); return r ? JSON.parse(r) : null; })(),
       cycles: (function () { const r = localStorage.getItem(CYCLES_KEY); return r ? JSON.parse(r) : null; })(),
       weeks: (function () { const r = localStorage.getItem(WEEKS_KEY); return r ? JSON.parse(r) : null; })(),
+      catColors: (function () { const r = localStorage.getItem(CATCOLORS_KEY); return r ? JSON.parse(r) : null; })(),
       unit: localStorage.getItem(UNIT_KEY) || "kg",
       updatedAt: Date.now(),
     };
@@ -82,6 +84,7 @@ window.Store = (function () {
     if (d.foods) write(FOODS_KEY, d.foods);
     if (d.cycles) write(CYCLES_KEY, d.cycles);
     if (d.weeks) write(WEEKS_KEY, d.weeks);
+    if (d.catColors) write(CATCOLORS_KEY, d.catColors);
     if (d.unit) localStorage.setItem(UNIT_KEY, d.unit);
     return true;
   }
@@ -142,6 +145,10 @@ window.Store = (function () {
     },
     setWeeks: (arr) => { const ok = write(WEEKS_KEY, arr); schedulePush(); return ok; },
 
+    // Per-category accent colour overrides. Returns {} when none set.
+    getCatColors: () => read(CATCOLORS_KEY),
+    setCatColors: (obj) => { const ok = write(CATCOLORS_KEY, obj); schedulePush(); return ok; },
+
     // Cloud sync: Firebase Google auth + per-user data.
     isSyncConfigured: () => !!syncCfg(),
     isSyncReady: () => !!fb(),       // Firebase SDK loaded?
@@ -162,7 +169,7 @@ window.Store = (function () {
     // Export everything as a JSON string (for backup / transfer)
     exportAll: () =>
       JSON.stringify(
-        { logs: read(LOGS_KEY), weights: read(WEIGHTS_KEY), foods: read(FOODS_KEY), cycles: read(CYCLES_KEY), weeks: read(WEEKS_KEY), unit: localStorage.getItem(UNIT_KEY) },
+        { logs: read(LOGS_KEY), weights: read(WEIGHTS_KEY), foods: read(FOODS_KEY), cycles: read(CYCLES_KEY), weeks: read(WEEKS_KEY), catColors: read(CATCOLORS_KEY), unit: localStorage.getItem(UNIT_KEY) },
         null,
         2
       ),
@@ -176,6 +183,7 @@ window.Store = (function () {
         if (data.foods) write(FOODS_KEY, data.foods);
         if (data.cycles) write(CYCLES_KEY, data.cycles);
         if (data.weeks) write(WEEKS_KEY, data.weeks);
+        if (data.catColors) write(CATCOLORS_KEY, data.catColors);
         if (data.unit) localStorage.setItem(UNIT_KEY, data.unit);
         schedulePush();
         return true;
@@ -190,6 +198,7 @@ window.Store = (function () {
       localStorage.removeItem(FOODS_KEY);
       localStorage.removeItem(CYCLES_KEY);
       localStorage.removeItem(WEEKS_KEY);
+      localStorage.removeItem(CATCOLORS_KEY);
       localStorage.removeItem(UNIT_KEY);
       signOut();
     },
