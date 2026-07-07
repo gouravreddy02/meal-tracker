@@ -1,5 +1,5 @@
 // sw.js — caches the app shell so it works offline once loaded.
-const CACHE = "mealtracker-v41";
+const CACHE = "mealtracker-v42";
 const ASSETS = [
   ".",
   "index.html",
@@ -25,8 +25,20 @@ self.addEventListener("activate", (e) => {
   self.clients.claim();
 });
 
+// Network-first for our own files: always try the network so a normal reload
+// picks up new deploys, and refresh the cache with each success. Fall back to
+// cache only when offline. Same-origin GETs only — cross-origin requests (e.g.
+// Firebase sync) pass straight through untouched.
 self.addEventListener("fetch", (e) => {
+  const req = e.request;
+  if (req.method !== "GET" || new URL(req.url).origin !== self.location.origin) return;
   e.respondWith(
-    caches.match(e.request).then((cached) => cached || fetch(e.request))
+    fetch(req)
+      .then((res) => {
+        const copy = res.clone();
+        caches.open(CACHE).then((c) => c.put(req, copy));
+        return res;
+      })
+      .catch(() => caches.match(req))
   );
 });
