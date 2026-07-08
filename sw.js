@@ -1,5 +1,5 @@
 // sw.js — caches the app shell so it works offline once loaded.
-const CACHE = "mealtracker-v42";
+const CACHE = "mealtracker-v43";
 const ASSETS = [
   ".",
   "index.html",
