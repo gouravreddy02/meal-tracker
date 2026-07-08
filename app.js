@@ -21,7 +21,7 @@
   // Base categories seed from PLAN; user-created ones are merged in from the saved
   // catalog once it loads (see syncCategories). Mutable so new categories persist.
   let CATEGORIES = Object.keys(P.foods);
-  const MEALS = ["Before workout", "After workout", "Breakfast", "Lunch", "Snacks", "Dinner"];
+  const MEALS = ["Before workout", "After workout", "Breakfast", "Snack 1", "Lunch", "Snack 2", "Dinner"];
   // Measurement units a food's macros can be quoted per (value stored on the food
   // as `u`; label shown in the New food picker). "serving" ≈ the old unit-less food.
   const UNITS = [
@@ -35,7 +35,8 @@
     { v: "serving", l: "serving" },
   ];
   // Which meal a journal item belongs to (legacy/unknown slots fall under Snacks).
-  const mealOf = (it) => (MEALS.indexOf(it.s) >= 0 ? it.s : "Snacks");
+  // Unknown/legacy meal slots (incl. the old "Snacks", now renamed) fall under Snack 2.
+  const mealOf = (it) => (MEALS.indexOf(it.s) >= 0 ? it.s : "Snack 2");
   // A journal item counts toward totals only once eaten. Legacy items (saved
   // before this field existed) have no `eaten` flag, so treat them as eaten.
   const isEaten = (it) => it.eaten !== false;
@@ -248,7 +249,9 @@
   // meal keys. Skips exact duplicates so re-runs are harmless.
   function cleanupLegacyMealFoods() {
     let changed = false;
+    const baseCats = Object.keys(P.foods);
     MEALS.forEach((meal) => {
+      if (baseCats.indexOf(meal) >= 0) return; // also a real catalog category — leave it
       const list = foods[meal];
       if (!Array.isArray(list)) return;
       list.forEach((f) => {
